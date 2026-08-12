@@ -198,6 +198,23 @@
   - `IMPLEMENTATION.md`（revision 4.1，787 行）
   - `task_plan.md`、`progress.md`（Phase 2.16 結案）
 
+### Phase 2.16b: round-7 事故與 revision 4.2（2026-08-12）
+- **狀態:** complete
+- 執行動作:
+  - 以更新後的 `codex-delegate` skill 送出 round-7（review mode、`gpt-5.6-sol`、effort high、design-review template、全新 thread、背景執行）
+  - **中止**：兩個 lens 開場即讀取 `~/.agents/skills/planning-with-files-zht/SKILL.md`，並依該 skill 開始把自己的審查筆記寫進本專案的 `task_plan.md`、`findings.md`、`progress.md`，共 13 次寫入。lens B 甚至把「目前階段」改寫為描述它自己的審查
+  - `pkill` 中止，`CODEX_FAIL|lensA|143/143`（SIGTERM），無 verdict 產出。`IMPLEMENTATION.md` md5 全程未變
+  - 污染為附加式、邊界清楚，逐檔手工移除；移除前先將兩個 lens 的工作筆記搶救至 scratchpad `r41_partial_findings.md`
+  - 根因：review mode 以 `workspace-write` 派工（verdict 必須可寫），等於開放整個 workspace；且 lens prompt 從未禁止修改專案檔案。已寫成事故報告送交另一 session 評估修法，明確要求等使用者批准才動 skill
+  - 專案納入 git，baseline commit `448cc3f`，`.gitignore` 排除 `.codex-review/`。日後委派前先 commit，出事即 `git checkout`
+  - 查證搶救筆記中的 3 項缺陷主張，**全部成立**並修正為 revision 4.2（見 `task_plan.md` Phase 2.16b）
+  - 787 → 839 行，41 → 43 tests
+- 建立/修改檔案:
+  - `IMPLEMENTATION.md`（revision 4.2）
+  - `.gitignore`（新建）
+  - `task_plan.md`、`progress.md`（本節與 Phase 2.16b）
+  - `findings.md`（移除污染，回復為 810 行）
+
 ### Phase 3: 實作 — 專案骨架與資料層
 - **狀態:** pending（**gated** — Phase 2.16 已關閉全部 14 項；等使用者決定送 round-7 複審或直接開工）
 - 執行動作:
@@ -262,7 +279,7 @@ API 可用性實測（2026-08-03，Phase 1）：
 
 | 問題 | 答案 |
 |------|------|
-| 我在哪裡？ | Phase 2.16 完成 — revision 4.1 已產出（787 行、41 tests），round-6 的 14 項缺陷全數關閉；等使用者決定送 round-7 或開工 |
+| 我在哪裡？ | Phase 2.16b 完成 — revision 4.2（839 行、43 tests）。round-7 委派因審查者寫入專案檔案而中止，其部分筆記的 3 項缺陷已查證並修正；專案已納入 git（baseline `448cc3f`）|
 | 我要去哪裡？ | 決定送 round-7 複審或直接開工 → Phase 3（骨架 + 資料層）→ Phase 4（UI + bundle）→ Phase 5（測試，依 §8 的 41 項）→ Phase 6（交付） |
 | 目標是什麼？ | macOS menu bar app：bar 顯示單一主幣即時價，點擊展開自訂清單（符號 + 24h sparkline + 價格 + 漲跌%），支援搜尋、持久化與 alerts；免 Xcode，以 `scripts/build-app.sh` 直接驅動 `swiftc` 並手工組裝 ad-hoc-signed `.app` bundle |
 | 我學到了什麼？ | (1) CoinGecko 免費配額撐不住即時價格，Binance klines 無批次；(2) SwiftPM 在此工具鏈因 `PackageDescription.Package.__allocating_init` undefined symbol 無法使用，deployment target 必須降至 macOS 14.0；(3) bare executable 會以 `bundleProxyForCurrentProcess is nil` 崩潰；(4) round 1–2 找到真實設計缺口，round 3–4 多半找到前版修訂自行引入的矛盾，round 5 換模型後判定整體過度設計，round 6 抓到的是簡化時斷掉的連接點（不是複雜度不足）；(5) 前四輪都漏掉 clock-source 錯誤，8 項時間量測中 7 項應使用 monotonic clock；(6) 委派回傳後若未當場寫入檔案，結果會遺失 — revision 4 的審查結果就這樣消失九天 |

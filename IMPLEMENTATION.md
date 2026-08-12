@@ -334,12 +334,28 @@ routes a merely-older file into the malformed-file recovery path of §4.2. That 
 isArmed = try container.decodeIfPresent(Bool.self, forKey: .isArmed) ?? false
 ```
 
-`schemaVersion` carries a migration contract rather than being an inert field:
+`PersistedState` must also declare a custom `init(from:)`, for the same reason. `schemaVersion` is a
+non-optional `Int`, so synthesized decoding of a pre-versioning file fails on the missing key before
+any migration branch can run — the "absent" case below would be unreachable and such a file would be
+misclassified as malformed:
 
-- absent or `0` — pre-versioning file; apply the `isArmed` default above and any later step in order;
+```swift
+let raw = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 0
+```
+
+Version is read first and dispatched on before the rest of the payload is interpreted:
+
+- `0`, meaning absent or explicitly zero — pre-versioning file; apply the `isArmed` default above and
+  every later migration step in ascending order;
+- greater than `0` and below the current version — a known older file; apply the migration steps from
+  that version upward. Each version needs its own step; an unrecognized older version has no defined
+  transform and enters read-only recovery rather than being guessed at;
 - equal to the current version — decode directly;
 - greater than the current version — a newer build wrote this file. Do not decode and do not
   overwrite; enter the read-only recovery mode of §4.2 and report a version mismatch.
+
+The current version is `1`, so at this point the only live branches are `0`, `1`, and "too new."
+The intermediate branch exists to make the contract complete before a second version needs it.
 
 Migration is a pure function from decoded old shape to current shape, and is tested against a
 committed fixture of real older JSON rather than a hand-built in-memory value.
@@ -385,7 +401,9 @@ struct NetworkFailure: Error, Sendable {
 
 Every `FeedEvent` carries `epoch`, including `.failed`. A struct with a nested `Kind` is used
 rather than a bare enum precisely so no case can omit it. `AppModel` compares `epoch` against the
-active Binance epoch and discards non-matching events before any state mutation.
+active Binance epoch and discards non-matching events before any state mutation. It learns that
+active epoch from the value `reconnect()` returns (§4.3), never by adopting the epoch of an event it
+just received.
 
 Runtime dictionaries are keyed by watch-item UUID, not symbol.
 Runtime source choice, epochs, and monotonic timestamps are not persisted.
@@ -401,7 +419,8 @@ SwiftUI views read it directly and invoke its main-actor methods.
 On launch it loads `PersistedState`, starts feeds for nonempty mappings,
 performs one sparkline refresh, then starts periodic loops.
 On watchlist changes it saves state, and calls the idempotent Binance reconnect only when the
-Binance product-ID set changed (§2.2).
+Binance product-ID set changed (§2.2), installing the epoch that call returns before reading further
+events.
 On empty watchlist it cancels all feed and periodic tasks.
 
 ### 4.1.1 Staleness drives reconnect
@@ -411,15 +430,30 @@ socket unhealth into a reconnect, and without it a half-open receive task stays 
 indefinitely while the UI shows stale data or silently runs on Coinbase.
 
 `AppModel` records `connectedInstant` when a session's `.connected` event is accepted, and tracks
-`lastValidTick` per session. Session age is measured from the later of the two, so a socket that
-opens and never speaks still ages.
+`lastValidTick` **per subscribed product ID**, not per session. Each product's age is measured from
+the later of its own last tick and `connectedInstant`, so a stream that opens and never speaks still
+ages.
+
+Per-product is load-bearing. A single combined stream carries many products, and they fail
+independently: a delisted or malfunctioning stream can go permanently silent while its neighbors
+tick normally. One session-wide timestamp would be refreshed by the healthy products and the silent
+one would never be noticed — quietly falsifying §6 item 4's claim that a bad stream turns into an
+ordinary reconnect.
+
+Session age is therefore the age of the **oldest** subscribed product, and the session is unhealthy
+when any subscribed product exceeds the threshold.
 
 On each 15-second stale check, for the current Binance epoch:
 
 1. if the session is already reconnecting or sleeping in backoff, do nothing;
-2. if age is under 60 seconds, do nothing;
-3. otherwise mark the quotes stale, call `reconnect()` once, and record that this epoch has been
-   health-reconnected.
+2. if no subscribed product has exceeded 60 seconds, do nothing;
+3. otherwise mark the affected products' quotes stale, call `reconnect()` once, and record that this
+   epoch has been health-reconnected.
+
+Reconnect is whole-session because the transport is one combined URL; a single silent product cannot
+be resubscribed on its own. If reconnection does not revive it — a delisted symbol, for example —
+the product stays stale, §2.3 keeps it on Coinbase when it is mapped, and the retry backoff prevents
+the repair attempt from becoming a loop.
 
 An epoch is health-reconnected at most once. The successor connection is a new epoch with its own
 `connectedInstant`, so a genuinely dead endpoint produces one reconnect per attempt governed by the
@@ -489,9 +523,25 @@ There is no separate alert history and therefore no history/state split-brain.
 ### 4.3 BinanceStreamClient
 
 `actor BinanceStreamClient` exclusively owns the web socket and receive task.
-It exposes `events(for productIDs: Set<String>) -> AsyncStream<FeedEvent>` and idempotent `reconnect`/`stop`.
 The actor owns the typed `AsyncStream<FeedEvent>.Continuation`.
 Stream termination cancels the socket task.
+
+Its interface returns the epoch to the caller rather than only embedding it in events:
+
+```swift
+func events(for productIDs: Set<String>) -> AsyncStream<FeedEvent>
+@discardableResult func reconnect() -> UUID   // the epoch now current
+func currentEpoch() -> UUID
+func stop()
+```
+
+`reconnect()` returning the new epoch is what makes the filter work at all. If `AppModel` could only
+learn an epoch by observing an event, the check would be circular: a buffered event from the
+superseded connection can be the very next thing it reads, and adopting that event's epoch as
+"current" would authorize exactly the event the mechanism exists to reject. So `AppModel` installs
+the epoch it received from `reconnect()` **before** consuming any further events, and treats
+everything not matching it as stale. `currentEpoch()` exists for reconciliation after a resume and
+must never be used to adopt an epoch mid-stream.
 
 Only the current epoch's connection task may yield events, and every event it yields is stamped
 with that epoch. The actor-side check stops a replaced task from yielding at all; the stamp is what
@@ -700,7 +750,7 @@ These omissions are decisions, not deferred hidden requirements.
 9. **Mandatory in-app alert history and badge.** Only durable latch state and OS notifications remain. If macOS suppresses a notification, there is no audit trail and the user may never know it fired.
 10. **Rich per-source health state.** UI exposes only live/stale/offline. Simultaneous partial failures may have less diagnostic detail.
 11. **Failback dwell and escalating source holdout.** First valid Binance tick wins. An unstable Binance connection can flap rows between sources and change alert precision.
-12. **Eighty-three clause-level tests.** Use the 41 behavior and failure-boundary tests below — one assertion group per specified behavior, not one per clause. A rare protocol edge not represented by those behaviors may escape until observed.
+12. **Eighty-three clause-level tests.** Use the 43 behavior and failure-boundary tests below — one assertion group per specified behavior, not one per clause. A rare protocol edge not represented by those behaviors may escape until observed.
 13. **Listing-cache refresh machinery and automatic re-resolution.** Candidate lists are fetched during add. A later delisting leaves a row stale until the user removes and re-adds it.
 14. **Proactive 23-hour reconnect and application pings.** Let receive failure and staleness drive reconnect. A half-open socket may recover more slowly, and Binance's daily close causes a brief gap.
 15. **Automatic identity verification from contract metadata.** No reliable cross-venue contract is specified. Every non-seeded mapping is explicitly user-confirmed instead.
@@ -765,23 +815,25 @@ The following cover behavior specified above that tests 1–23 leave unasserted.
 contracts, not rare protocol edges.
 
 24. **Stale drives reconnect:** 60 seconds without a valid tick produces exactly one `reconnect()` for that epoch; awake detection lands between 60 and 75 seconds; a session already backing off is not restarted; a socket that connects and never ticks still ages from `connectedInstant`.
-25. **Stale epoch rejection:** a `.failed` event yielded by a superseded connection and delivered from the `AsyncStream` buffer after its replacement is `connected` does not mark the replacement failed; the same holds for a late `.ticker`.
-26. **Backoff reset rule:** the attempt counter survives connect/close cycles and resets only after a valid ticker update; a server that accepts then immediately closes walks 1/2/4/8/16/30 rather than repeating 1.
-27. **Reconnect trigger scope:** reordering rows, changing the primary, and editing an alert leave the socket untouched; only a changed Binance product-ID set rebuilds the URL.
-28. **Coinbase-only item:** an item with Binance “No market” and a confirmed Coinbase product is polled immediately at launch and every 60 seconds thereafter, with no Binance failure required.
-29. **Active quote asset:** a dual-mapped row shows USDT under Binance and USD under Coinbase, updating on failover in both directions; with no quote it falls back to the mapped venue's asset rather than blank.
-30. **Search debounce and cancellation:** keystrokes within 300 ms of running time issue one request; sleep does not complete the debounce; an emptied query cancels the in-flight task and clears results.
-31. **Candidate confirmation:** venue candidates are filtered by base asset, quote asset, and trading status; selecting “No market” for both venues is rejected; a single candidate still requires explicit confirmation.
-32. **Alert edit semantics:** changing direction, threshold, or hysteresis, or enabling a disabled alert, re-arms and clears the fire date; changing only cooldown preserves latch state.
-33. **Evaluation order:** a disarmed alert outside its band re-arms while inside cooldown; a cooldown-suppressed breach stays armed; only one transaction persists per evaluation.
-34. **Both directions:** below-alert firing uses `price < threshold` and above-alert re-arming uses `price < threshold × (1 - h/100)`; band-edge equality neither fires nor re-arms.
-35. **Migration from a real fixture:** a committed older JSON file lacking `isArmed` decodes to a disarmed alert rather than entering recovery mode; a `schemaVersion` above the current build enters recovery mode without overwriting.
-36. **Recovery-mode write protection:** with a malformed file present, a reorder and an alert latch transition both fail without touching the file; only Reset replaces it; a missing Application Support directory is created before the first ordinary write.
-37. **Shared rate-limit gate:** a 429 from the sparkline batch also suppresses search until the deadline; `Retry-After` is honored in both integer-seconds and HTTP-date form; the deadline is consumed by system sleep; the REST timeout is exactly 15 seconds.
-38. **Notification authorization:** permission is requested when the first alert is enabled, not at launch; denial and submission failure each surface a nonmodal error while the durable latch transition still stands.
-39. **Formatting:** prices use grouping separators with two decimals at or above 1 and up to six below; the menu label shows `SYMBOL price` for the primary item and `BitPrice` when the list is empty or the primary has no quote.
-40. **Single instance:** with another BitPrice already running, startup exits without mutating the persisted file.
-41. **Notification smoke test, manual:** in a real desktop GUI session, grant permission and trigger one alert; record whether macOS presents it, but do not fail core alert logic if presentation is suppressed.
+25. **Stale epoch rejection:** a `.failed` event yielded by a superseded connection and delivered from the `AsyncStream` buffer after its replacement is `connected` does not mark the replacement failed; the same holds for a late `.ticker`. The replacement epoch is taken from `reconnect()`'s return value, and a test in which the buffered old event is read first still rejects it.
+26. **Partial stream silence:** in a two-product combined stream where one product keeps ticking and the other goes silent for 60 seconds, the session is judged unhealthy and reconnects once; only the silent product's quote is marked stale. A session-wide timestamp would refresh on the live product and never fire — that is the regression this test exists to catch.
+27. **Absent schemaVersion:** a fixture with no `schemaVersion` key decodes as version `0` and migrates, rather than failing the decode into recovery mode; this is asserted separately from the missing-`isArmed` case, since either alone would fail synthesized decoding for a different reason.
+28. **Backoff reset rule:** the attempt counter survives connect/close cycles and resets only after a valid ticker update; a server that accepts then immediately closes walks 1/2/4/8/16/30 rather than repeating 1.
+29. **Reconnect trigger scope:** reordering rows, changing the primary, and editing an alert leave the socket untouched; only a changed Binance product-ID set rebuilds the URL.
+30. **Coinbase-only item:** an item with Binance “No market” and a confirmed Coinbase product is polled immediately at launch and every 60 seconds thereafter, with no Binance failure required.
+31. **Active quote asset:** a dual-mapped row shows USDT under Binance and USD under Coinbase, updating on failover in both directions; with no quote it falls back to the mapped venue's asset rather than blank.
+32. **Search debounce and cancellation:** keystrokes within 300 ms of running time issue one request; sleep does not complete the debounce; an emptied query cancels the in-flight task and clears results.
+33. **Candidate confirmation:** venue candidates are filtered by base asset, quote asset, and trading status; selecting “No market” for both venues is rejected; a single candidate still requires explicit confirmation.
+34. **Alert edit semantics:** changing direction, threshold, or hysteresis, or enabling a disabled alert, re-arms and clears the fire date; changing only cooldown preserves latch state.
+35. **Evaluation order:** a disarmed alert outside its band re-arms while inside cooldown; a cooldown-suppressed breach stays armed; only one transaction persists per evaluation.
+36. **Both directions:** below-alert firing uses `price < threshold` and above-alert re-arming uses `price < threshold × (1 - h/100)`; band-edge equality neither fires nor re-arms.
+37. **Migration from a real fixture:** a committed older JSON file lacking `isArmed` decodes to a disarmed alert rather than entering recovery mode; a `schemaVersion` above the current build enters recovery mode without overwriting.
+38. **Recovery-mode write protection:** with a malformed file present, a reorder and an alert latch transition both fail without touching the file; only Reset replaces it; a missing Application Support directory is created before the first ordinary write.
+39. **Shared rate-limit gate:** a 429 from the sparkline batch also suppresses search until the deadline; `Retry-After` is honored in both integer-seconds and HTTP-date form; the deadline is consumed by system sleep; the REST timeout is exactly 15 seconds.
+40. **Notification authorization:** permission is requested when the first alert is enabled, not at launch; denial and submission failure each surface a nonmodal error while the durable latch transition still stands.
+41. **Formatting:** prices use grouping separators with two decimals at or above 1 and up to six below; the menu label shows `SYMBOL price` for the primary item and `BitPrice` when the list is empty or the primary has no quote.
+42. **Single instance:** with another BitPrice already running, startup exits without mutating the persisted file.
+43. **Notification smoke test, manual:** in a real desktop GUI session, grant permission and trigger one alert; record whether macOS presents it, but do not fail core alert logic if presentation is suppressed.
 
-Implementation is complete only when tests 1–40 pass.
-Test 41 records the currently unverified OS integration fact.
+Implementation is complete only when tests 1–42 pass.
+Test 43 records the currently unverified OS integration fact.

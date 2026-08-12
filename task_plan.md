@@ -6,7 +6,7 @@
 
 ## 目前階段
 
-Phase 2.16 完成 — revision 4.1 已產出（787 行、41 tests）。round-7 首次委派因審查者寫入專案檔案而中止，尚未取得複審結果
+Phase 2.16b 完成 — revision 4.2（839 行、43 tests）。round-7 首次委派中止，但其部分筆記抓到 3 項真缺陷並已修正；仍未取得完整複審
 
 ## 階段
 
@@ -191,6 +191,16 @@ Round-3 以 high effort 審查，關閉 9/14，並抓出 1 個 revision 3 自己
 - [ ] 修訂後決定是否送 round-7 複審
 - **狀態:** complete（14 項全修，`IMPLEMENTATION.md` 598 → 787 行、24 → 41 tests）
 - **注意**：本輪 9 項 major 中，第 1、3、8 項與 4 項 minor 中的第 1 項，都是 revision 4 簡化時斷掉的連接點。修訂時**不應**整批加回 revision 3.2 的機制，而是補上缺的連接
+
+### Phase 2.16b: revision 4.2（round-7 部分筆記的修正）
+Round-7 兩個 lens 被中止前未產出 verdict，但其工作筆記已抓到 3 項真缺陷。逐項查證後全部成立並修正。
+
+- [x] **`PersistedState` 缺 root decoder** — `schemaVersion` 是非 optional `Int`，synthesized decoding 遇缺鍵即失敗，我在 §3 寫的「absent 分支」根本走不到，舊檔會被誤判為 malformed。加自訂 `init(from:)` 用 `decodeIfPresent ?? 0`，並補「已知較舊版本」分支
+- [x] **`lastValidTick` 是 session-wide** — combined stream 中某一 product 持續 tick 會讓整個 session 看似健康，另一 product 永久靜默卻不觸發 reconnect，等於架空 §6 item 4。改為 per-product 計齡，session age 取最舊者
+- [x] **epoch 取得是循環論證** — §4.3 只給 `events`/`reconnect`/`stop`，`AppModel` 無從得知當前 epoch，只能從事件裡讀；但 buffer 中的舊事件可能先到，採用它的 epoch 正好授權了該機制要擋的東西。`reconnect()` 改為回傳新 epoch，並加 `currentEpoch()`
+- [x] 新增 tests 26（partial stream silence）、27（absent schemaVersion），其後測試重新編號至 43
+- **狀態:** complete（839 行、43 tests）
+- **教訓**：這 3 項全是 revision 4.1 修訂時自己引入或未補完的，與 round 3–4 的模式相同。第 2、3 項尤其值得記：我補的機制在文字上成立，但缺少讓它實際可運作的介面或粒度
 
 ### Phase 3: 實作 — 專案骨架與資料層
 - [ ] `Models.swift` — §3 的 persisted/runtime types、雙 venue mapping、alerts 與 `Sendable` 邊界
