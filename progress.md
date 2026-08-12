@@ -215,8 +215,25 @@
   - `task_plan.md`、`progress.md`（本節與 Phase 2.16b）
   - `findings.md`（移除污染，回復為 810 行）
 
+### Phase 2.17: round-7 複審完成 — 判 reject（2026-08-12）
+- **狀態:** in progress（短項已補；兩個 FLAG 另開 session）
+- 執行動作:
+  - 以修復後的 `codex-delegate` 重跑 round-7：`run_id=r42`、`gpt-5.6-sol`、effort high、design-review、雙 lens、1200s/lens
+  - **委派本身首次完全按預期完成**：`CODEX_DONE`、contamination gate 通過、`git status` 乾淨、spec md5 `b06d3c0` 全程未變、work dir 外零寫入。sibling session 的 sandbox 修法（`cwd=WORK_DIR` + `disk-full-read-access` + 前後 hash 比對）實戰有效
+  - 另於 role prompt 自行加上 fix B（明文禁止寫入 verdict 以外的檔案、禁止使用任何 planning skill）—— 結構性修法已足夠，但這是事故的實際觸發點，成本為零
+  - 結果 **20 項全 `true_hit`：2 blocking、12 major、6 minor**，lensB 判 reject。全文收錄至 `findings.md`
+  - 查證兩個 blocker 屬實：`reconnect()` 有回傳值無參數（watchlist 變動重連舊 URL）；client 自主 retry 的 epoch 無管道到達 `AppModel`，且 §4.3 自己的禁令關掉唯一替代路徑，Binance 斷線後永久卡死
+  - 補短項四則：test 24/26 的 60 秒改為嚴格大於、`isArmed` fallback 限定 schemaVersion 0、§4.2 補上「未定義 migration 的較舊版本」進入 recovery、test 37 擴充涵蓋該分支
+  - **兩個 FLAG 未動**：串流介面整體重設計、其餘既存 major/minor。均另開 session
+- 建立/修改檔案:
+  - `findings.md`（新增 Round-7 節）
+  - `task_plan.md`（新增 Phase 2.17 與 FLAG）
+  - `IMPLEMENTATION.md`（四則短修正，839 → 850 行）
+  - `progress.md`（本節）
+- **教訓**：revision 4.2 的四項修改有三項引入新缺陷，且都是同一形狀 —— 文字描述的機制讀起來成立，但介面 supply 不了它需要的東西，或粒度細不到它要偵測的層級。這已是連續第四輪。本輪 role prompt **已明白寫出這個形狀並要求 lens 針對它查**，我仍在同一次修訂中又犯三次。把失敗模式寫進委派說明防不住自己再犯，只有換人審才擋得住
+
 ### Phase 3: 實作 — 專案骨架與資料層
-- **狀態:** pending（**gated** — Phase 2.16 已關閉全部 14 項；等使用者決定送 round-7 複審或直接開工）
+- **狀態:** pending（**gated** — round-7 判 reject，2 blocker 未修；串流介面須整體重設計後才可開工）
 - 執行動作:
   -
 - 建立/修改檔案:
@@ -279,10 +296,10 @@ API 可用性實測（2026-08-03，Phase 1）：
 
 | 問題 | 答案 |
 |------|------|
-| 我在哪裡？ | Phase 2.16b 完成 — revision 4.2（839 行、43 tests）。round-7 委派因審查者寫入專案檔案而中止，其部分筆記的 3 項缺陷已查證並修正；專案已納入 git（baseline `448cc3f`）|
-| 我要去哪裡？ | 決定送 round-7 複審或直接開工 → Phase 3（骨架 + 資料層）→ Phase 4（UI + bundle）→ Phase 5（測試，依 §8 的 41 項）→ Phase 6（交付） |
+| 我在哪裡？ | Phase 2.17 進行中 — round-7 複審已完成並判 **reject**（20 項全 `true_hit`：2 blocking、12 major、6 minor）。四則短修正已補（850 行、43 tests）；**兩個 FLAG 未動，另開 session**：串流介面整體重設計、其餘既存 major/minor |
+| 我要去哪裡？ | 串流介面重設計（新 session）→ 其餘既存缺陷 → 再複審 → Phase 3（骨架 + 資料層）→ Phase 4（UI + bundle）→ Phase 5（測試，依 §8 的 43 項）→ Phase 6（交付） |
 | 目標是什麼？ | macOS menu bar app：bar 顯示單一主幣即時價，點擊展開自訂清單（符號 + 24h sparkline + 價格 + 漲跌%），支援搜尋、持久化與 alerts；免 Xcode，以 `scripts/build-app.sh` 直接驅動 `swiftc` 並手工組裝 ad-hoc-signed `.app` bundle |
-| 我學到了什麼？ | (1) CoinGecko 免費配額撐不住即時價格，Binance klines 無批次；(2) SwiftPM 在此工具鏈因 `PackageDescription.Package.__allocating_init` undefined symbol 無法使用，deployment target 必須降至 macOS 14.0；(3) bare executable 會以 `bundleProxyForCurrentProcess is nil` 崩潰；(4) round 1–2 找到真實設計缺口，round 3–4 多半找到前版修訂自行引入的矛盾，round 5 換模型後判定整體過度設計，round 6 抓到的是簡化時斷掉的連接點（不是複雜度不足）；(5) 前四輪都漏掉 clock-source 錯誤，8 項時間量測中 7 項應使用 monotonic clock；(6) 委派回傳後若未當場寫入檔案，結果會遺失 — revision 4 的審查結果就這樣消失九天 |
+| 我學到了什麼？ | (1) CoinGecko 免費配額撐不住即時價格，Binance klines 無批次；(2) SwiftPM 在此工具鏈因 `PackageDescription.Package.__allocating_init` undefined symbol 無法使用，deployment target 必須降至 macOS 14.0；(3) bare executable 會以 `bundleProxyForCurrentProcess is nil` 崩潰；(4) round 1–2 找到真實設計缺口，round 3–4 多半找到前版修訂自行引入的矛盾，round 5 換模型後判定整體過度設計，round 6 抓到的是簡化時斷掉的連接點（不是複雜度不足）；(5) 前四輪都漏掉 clock-source 錯誤，8 項時間量測中 7 項應使用 monotonic clock；(6) 委派回傳後若未當場寫入檔案，結果會遺失 — revision 4 的審查結果就這樣消失九天；(7) round 7 判 reject，且 revision 4.2 四項修改有三項引入新缺陷，形狀一致 —— 文字讀起來成立但介面 supply 不了、或粒度不夠細。已連續四輪。把失敗模式寫進 role prompt 並未防住自己再犯，只有換人審才擋得住 |
 | 我做了什麼？ | 實測環境、5 家 API 與兩種走勢來源；建立規劃與規格；修復 modulemap 工具鏈問題並驗證 `swiftc`/bundle 路徑；完成 revisions 2、3、3.1、3.2、4 與六輪 Codex review；round 5 改用 `gpt-5.6-sol`，接受過度設計結論，將規格由 1,369 行/83 tests 簡化為 598 行/24 tests；round 6 取得 revision 4 首次獨立審查（1 blocker、9 major、4 minor），結果已從 session 紀錄復原並收錄，Phase 2.16 待修訂 |
 
 ---

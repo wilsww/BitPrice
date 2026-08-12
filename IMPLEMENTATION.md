@@ -334,6 +334,14 @@ routes a merely-older file into the malformed-file recovery path of §4.2. That 
 isArmed = try container.decodeIfPresent(Bool.self, forKey: .isArmed) ?? false
 ```
 
+**This default applies only when the root `schemaVersion` resolved to `0`.** At the current version
+the field is mandatory: a version-`1` file whose alert is missing `isArmed`, or carries it as
+`null`, was not written by any build of this app and is malformed — it enters the recovery mode of
+§4.2 rather than silently decoding as disarmed. Applying the fallback unconditionally would
+contradict the "equal to the current version — decode directly" branch below and would let durable
+alert state change without the user being told. The decoder therefore needs the resolved version in
+scope, which it takes from the root decoder via `userInfo`.
+
 `PersistedState` must also declare a custom `init(from:)`, for the same reason. `schemaVersion` is a
 non-optional `Int`, so synthesized decoding of a pre-versioning file fails on the missing key before
 any migration branch can run — the "absent" case below would be unreachable and such a file would be
@@ -476,8 +484,11 @@ Persistence is one JSON file at:
 Missing file means first launch and creates the curated BTC state.
 A successfully decoded empty array remains empty.
 
-Malformed JSON, or a `schemaVersion` newer than this build, puts the store into **read-only recovery
-mode**. In that mode the app runs from an in-memory BTC seed, shows a persistent recovery banner, and
+Three conditions put the store into **read-only recovery mode**: malformed JSON, a `schemaVersion`
+newer than this build, and an older `schemaVersion` with no defined migration step. The third is the
+`0 < version < current` branch of §3 — a valid-looking file the app has no transform for. All three
+are one rule here, so the store cannot promise recovery for a case §3 dispatches to it and this
+section fails to accept. In that mode the app runs from an in-memory BTC seed, shows a persistent recovery banner, and
 **every write path returns an error without touching the file** — structural edits, alert latch
 transitions, and the debounced save alike. Refusing writes is what makes the preservation promise
 real: without it, the first reorder or alert fire silently overwrites the file the user was told was
@@ -814,9 +825,9 @@ No test depends on live public APIs except the separately marked smoke test.
 The following cover behavior specified above that tests 1–23 leave unasserted. They are core
 contracts, not rare protocol edges.
 
-24. **Stale drives reconnect:** 60 seconds without a valid tick produces exactly one `reconnect()` for that epoch; awake detection lands between 60 and 75 seconds; a session already backing off is not restarted; a socket that connects and never ticks still ages from `connectedInstant`.
+24. **Stale drives reconnect:** the threshold is strict — at exactly 60 seconds no reconnect occurs, and the first stale check past 60 seconds produces exactly one `reconnect()` for that epoch. Awake detection therefore lands above 60 and below 75 seconds. A session already backing off is not restarted; a socket that connects and never ticks still ages from `connectedInstant`.
 25. **Stale epoch rejection:** a `.failed` event yielded by a superseded connection and delivered from the `AsyncStream` buffer after its replacement is `connected` does not mark the replacement failed; the same holds for a late `.ticker`. The replacement epoch is taken from `reconnect()`'s return value, and a test in which the buffered old event is read first still rejects it.
-26. **Partial stream silence:** in a two-product combined stream where one product keeps ticking and the other goes silent for 60 seconds, the session is judged unhealthy and reconnects once; only the silent product's quote is marked stale. A session-wide timestamp would refresh on the live product and never fire — that is the regression this test exists to catch.
+26. **Partial stream silence:** in a two-product combined stream where one product keeps ticking and the other stays silent past 60 seconds, the session is judged unhealthy and reconnects once; only the silent product's quote is marked stale. A session-wide timestamp would refresh on the live product and never fire — that is the regression this test exists to catch. The same strict boundary as test 24 applies: at exactly 60 seconds of silence, nothing happens.
 27. **Absent schemaVersion:** a fixture with no `schemaVersion` key decodes as version `0` and migrates, rather than failing the decode into recovery mode; this is asserted separately from the missing-`isArmed` case, since either alone would fail synthesized decoding for a different reason.
 28. **Backoff reset rule:** the attempt counter survives connect/close cycles and resets only after a valid ticker update; a server that accepts then immediately closes walks 1/2/4/8/16/30 rather than repeating 1.
 29. **Reconnect trigger scope:** reordering rows, changing the primary, and editing an alert leave the socket untouched; only a changed Binance product-ID set rebuilds the URL.
@@ -827,7 +838,7 @@ contracts, not rare protocol edges.
 34. **Alert edit semantics:** changing direction, threshold, or hysteresis, or enabling a disabled alert, re-arms and clears the fire date; changing only cooldown preserves latch state.
 35. **Evaluation order:** a disarmed alert outside its band re-arms while inside cooldown; a cooldown-suppressed breach stays armed; only one transaction persists per evaluation.
 36. **Both directions:** below-alert firing uses `price < threshold` and above-alert re-arming uses `price < threshold × (1 - h/100)`; band-edge equality neither fires nor re-arms.
-37. **Migration from a real fixture:** a committed older JSON file lacking `isArmed` decodes to a disarmed alert rather than entering recovery mode; a `schemaVersion` above the current build enters recovery mode without overwriting.
+37. **Migration from a real fixture:** a committed older JSON file lacking `isArmed` decodes to a disarmed alert rather than entering recovery mode; a `schemaVersion` above the current build enters recovery mode without overwriting; a positive `schemaVersion` below the current build with no defined migration step also enters recovery mode without overwriting, rather than being decoded on a guess. A version-`1` file missing `isArmed`, or carrying it as `null`, enters recovery mode — the §3 fallback is scoped to version `0` and must not rescue it.
 38. **Recovery-mode write protection:** with a malformed file present, a reorder and an alert latch transition both fail without touching the file; only Reset replaces it; a missing Application Support directory is created before the first ordinary write.
 39. **Shared rate-limit gate:** a 429 from the sparkline batch also suppresses search until the deadline; `Retry-After` is honored in both integer-seconds and HTTP-date form; the deadline is consumed by system sleep; the REST timeout is exactly 15 seconds.
 40. **Notification authorization:** permission is requested when the first alert is enabled, not at launch; denial and submission failure each surface a nonmodal error while the durable latch transition still stands.

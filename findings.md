@@ -778,6 +778,74 @@ Codex 修法：每個 `FeedEvent` 都帶 `sessionID`；由 `AppModel` 拒絕不�
 
 換言之 round-5 的簡化方向未被推翻，但簡化的執行留下了洞。
 
+## Round-7：revision 4.2 獨立審查（2026-08-12，gpt-5.6-sol，high effort，全新 thread）
+
+`run_id=r42`，`design-review` template，雙 lens，1200s/lens。thread：lensA `019ff6a8-334e-72a3-b755-6a8785e202d3`、lensB `019ff6a8-33ab-71c3-9174-43f85eb4d56d`（`.codex-review/thread_ledger.txt`）。審查對象為 839 行、43 tests 的 revision 4.2。
+
+這是第一次完全按預期跑完的委派：`CODEX_DONE`，contamination gate 通過，`git status` 乾淨，spec md5 `b06d3c0` 全程未變。委派機制的 sandbox 破口（見 Phase 2.16b）經 cross-session 修復後實戰驗證有效 —— work dir 外零寫入。
+
+**結果：lensB 判 reject。20 項全 `true_hit` —— 2 blocking、12 major、6 minor。** 兩個 lens 獨立收斂在同樣的前三名。
+
+### Blocker 1：`reconnect()` 收不到變更後的 product 集合（lensA #1、lensB #3）
+
+revision 4.2 給了 `reconnect()` 回傳值，卻沒給它參數。§4.1 寫「calls the idempotent Binance reconnect only when the Binance product-ID set changed」，但整個 §4.3 介面裡唯一接受 product IDs 的是 `events(for:)`。
+
+後果：watchlist 變動時 `reconnect()` 重建的是**舊 URL**；而 app 啟動時 `events(for:)` 能給 product 集合卻不回傳 epoch。啟動與 set 變更這兩條路徑，各自缺另一半。
+
+修法方向：單一 lifecycle contract，例如 `start/reconnect(productIDs:) -> (stream, epoch)`，一次涵蓋初次啟動、集合替換、空集合停止、continuation 所有權、epoch 安裝。
+
+### Blocker 2：client 自主 retry 產生的 epoch，AppModel 永遠無法採用（lensB #1）
+
+較尖銳的一個。§2.2 給 client 自己的 backoff 與 retry；§4.1.1 說「the successor connection is a new epoch」。但 epoch 傳到 AppModel 的唯一管道是**從 `reconnect()` 回傳**，而 client 自主重試不經過 `reconnect()`。§4.3 又明文堵死唯一的逃生口：`currentEpoch()` "must never be used to adopt an epoch mid-stream"。
+
+後果：任何一次自發性 socket 失敗之後，AppModel 永遠只授權那個已死的 epoch，拒收復原連線的每一個 `.connected` 與 `.ticker`。**Binance 復原永久卡死。**
+
+這是 revision 4.2 修法自己的禁令造成的 —— 為了堵住循環論證而寫的那句話，同時關掉了合法路徑。
+
+### Major：靜默 product 造成無限重連迴圈（lensA #3、lensB #4）
+
+4.2 的 per-product staleness 修法撞上 4.1 的 retry counter 規則。§2.2 說 counter「resets to zero only after the current session has accepted one valid ticker update」—— 在 combined stream 裡，**任何一個活著的 product 都會替整個 session 重置 counter**。
+
+所以：BTC 正常、另一檔已下架永久靜默 → BTC 的第一個 tick 把 counter 歸零 → 靜默那檔超過 60 秒 → 整條 session 重連 → 新 epoch 重複同樣序列。每 60–75 秒一次，永遠停在第一段延遲，到不了 30 秒 cap，持續打斷健康的報價。
+
+§4.1.1 宣稱「the retry backoff prevents the repair attempt from becoming a loop」為假。**4.2 新寫的 test 26 只驗一個 epoch，所以驗不出來。**
+
+### 其餘 major / minor
+
+修法自身引入者：
+
+| 來源 | 章節 | 缺陷 |
+|---|---|---|
+| A#2、B#2 | §4.1 §4.3 | epoch handoff 非原子。AppModel 必須跨 actor await `reconnect()`，期間 MainActor 會去跑 stream consumer，buffer 裡的舊 epoch 事件在新 UUID 安裝前就通過了過濾 |
+| A#4 | §3 | `PriceAlert` 的 `decodeIfPresent(isArmed) ?? false` 未限定只作用於 version 0。version 1 檔案缺欄或帶 `null` 會靜默解為 disarmed，而非進入 recovery |
+| B#11 | §3 §4.2 | §3 承諾「unrecognized older version 進入 read-only recovery」，§4.2 卻只定義 malformed 與 newer 兩種進入條件。4.2 新增的第四分支沒有在 store 端對應 |
+
+既存缺陷（非本次修法造成，兩 lens 多有交集）：
+
+| 來源 | 章節 | 缺陷 |
+|---|---|---|
+| A#8、B#9 | §1.1 §2.2 §2.4 | 無 watchlist 上限，卻把所有 Binance stream 與所有 CoinGecko ID 各塞進單一 URL。超過長度或服務上限時整批失效 |
+| A#9、B#7 | §1.1 §4.2 | 500 ms debounce 期間結束程式，該次編輯永久遺失。無 termination flush，也無「可接受損失」的明文 |
+| B#5 | §2.3 §4.1 | 空 watchlist 取消所有週期任務後，empty→nonempty 沒有任何一節負責重啟。加入 Coinbase-only 項目後必須重啟 app 才會有報價 |
+| B#6 | §2.3 §6 | Coinbase 回應無完成時效檢查。慢回的 fallback 會覆蓋掉已經 failback 的新鮮 Binance 報價，甚至用過期來源評估 alert |
+| B#8 | §3 §4.2 | decode 只驗 alert 數值，不驗 root invariant。重複 item UUID、重複 CoinGecko ID、dangling primary ID 都能通過，之後被一般 save 固化 |
+| A#5 | §1.1 §2.4 §8 test 15 | 用無時間戳、且明文宣告間距非契約的序列，保證不了「24 小時」sparkline。test 15 把「取最後 24 點」這個無依據的代理寫死 |
+| A#6 | §1.1 §1.2 §2.2 | 兩個不同 watch item 可持久化同一個 venue product ID，但未定義 tick 要 fan-out 到所有相符 item 還是該拒絕重複 mapping |
+| A#7 | §4.1.1 §8 tests 24/26 | 演算法寫 "exceeded 60 seconds"（嚴格大於），tests 24 與 26 卻要求剛好 60 秒就重連 |
+| B#10 | §1.1 §4.1.1 §8 test 42 | 單一實例檢查是 non-atomic check-then-act。兩個近同時啟動的 process 都會通過，之後互相覆蓋存檔 |
+
+### 對這批缺陷性質的觀察
+
+**revision 4.2 的四項修改，有三項引入了新缺陷**，而且都是同一種形狀：**文字描述的機制讀起來成立，但介面 supply 不了它需要的東西，或粒度細不到它要偵測的層級。**
+
+- blocker 1：介面沒有參數可傳 product 集合
+- blocker 2：介面沒有管道交付 client 自主產生的 epoch，且修法自己寫下的禁令關掉了唯一替代路徑
+- 靜默迴圈：counter 的粒度是 session，但需要偵測的事件是 per-product
+
+這與 round 3、round 4 的失敗模式完全一致，現在已是**連續第四輪**。值得記的是：本輪 role prompt **已經明白寫出這個形狀並要求 lens 針對它查**，我仍然在同一次修訂裡又犯了三次。把失敗模式寫進委派說明，防不住自己再犯 —— 只有換人審才擋得住。
+
+結論：這個介面已經連補四輪，每輪修出下一輪的 blocker。不應再做第五次局部修補。兩個 lens 在 `what_would_change_my_mind` 各自獨立提出同一個建議 —— 合併成單一 lifecycle contract，一次涵蓋 start、set 變更、retry、epoch 交付。**已轉為 Phase 2.17，另開 session 進行。**
+
 ## 資源
 
 - CoinGecko API 定價：https://www.coingecko.com/en/api/pricing

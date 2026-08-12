@@ -188,7 +188,7 @@ Round-3 以 high effort 審查，關閉 9/14，並抓出 1 個 revision 3 自己
 - [x] **major 8** 「每 30 秒重試」無保證 — backoff 重置時機未定義，可能持續 1 秒 churn。改為只在收到有效 tick 後重置，health-triggered reconnect 每 session 一次
 - [x] **major 9** §8 的 24 測試漏掉 14 類核心已規定行為（非罕見邊角）— 全部補為 acceptance test
 - [x] 4 項 minor（只在 Binance product 集合改變時重連、quote asset 依 `Quote.source` 推導、§4.6 rollback 用字修正、§7 Binance 中斷改「有舊報價則 stale」）
-- [ ] 修訂後決定是否送 round-7 複審
+- [x] 修訂後決定是否送 round-7 複審 — 已送（見 Phase 2.17）
 - **狀態:** complete（14 項全修，`IMPLEMENTATION.md` 598 → 787 行、24 → 41 tests）
 - **注意**：本輪 9 項 major 中，第 1、3、8 項與 4 項 minor 中的第 1 項，都是 revision 4 簡化時斷掉的連接點。修訂時**不應**整批加回 revision 3.2 的機制，而是補上缺的連接
 
@@ -201,6 +201,32 @@ Round-7 兩個 lens 被中止前未產出 verdict，但其工作筆記已抓到 
 - [x] 新增 tests 26（partial stream silence）、27（absent schemaVersion），其後測試重新編號至 43
 - **狀態:** complete（839 行、43 tests）
 - **教訓**：這 3 項全是 revision 4.1 修訂時自己引入或未補完的，與 round 3–4 的模式相同。第 2、3 項尤其值得記：我補的機制在文字上成立，但缺少讓它實際可運作的介面或粒度
+
+### Phase 2.17: round-7 複審完成 — 判 reject
+`run_id=r42`，gpt-5.6-sol high effort，雙 lens 各自獨立。**20 項全 `true_hit`：2 blocking、12 major、6 minor。** 完整判定見 `findings.md`「Round-7」節。
+
+委派本身首次完全按預期完成：contamination gate 通過、`git status` 乾淨、spec md5 `b06d3c0` 未變。Phase 2.16b 的 sandbox 破口修復實戰驗證有效。
+
+- [x] 收錄 verdict 至 `findings.md`
+- [x] 修正 test 24/26 的 60 秒邊界（演算法為嚴格大於，測試卻要求剛好 60 秒即重連）
+- [x] `PriceAlert` 的 `decodeIfPresent(isArmed) ?? false` 限定只作用於 schemaVersion 0
+- [x] §4.2 補上「unrecognized older version 進入 read-only recovery」，與 §3 第四分支對齊
+- [ ] **FLAG — 串流介面整體重設計**（見下）
+- [ ] FLAG — 其餘既存 major/minor（watchlist 上限、termination flush、empty→nonempty 重啟、Coinbase late response、root invariant 驗證、sparkline 24 小時保證、重複 venue product ID、單一實例 atomicity）
+- **狀態:** in progress（短項已補；兩個 FLAG 另開 session）
+
+#### FLAG：串流介面必須整體重設計，不得再局部修補
+
+兩個 blocker 都出在 `BinanceStreamClient` 的介面，且都是 revision 4.2 修法自己造成的：
+
+1. `reconnect()` 有回傳值但**無參數** — watchlist 變動時重建的是舊 URL；啟動路徑的 `events(for:)` 則能收 product 集合卻不回傳 epoch。兩條路徑各缺一半
+2. client **自主 retry** 產生的 successor epoch 沒有任何管道能到達 `AppModel`，而 §4.3 為了堵住循環論證所寫的 `currentEpoch()` 禁令，同時關掉了唯一替代路徑 → Binance 斷線後永久卡死
+
+外加 §2.2 的 retry counter 粒度是 session、但需偵測的是 per-product，造成靜默 product 每 60–75 秒強制整條重連且永不進入 backoff cap。
+
+**這個介面已連補四輪，每輪修出下一輪的 blocker。** 兩個 lens 在 `what_would_change_my_mind` 各自獨立提出同一結論：合併為單一 lifecycle contract，一次涵蓋 start、product 集合替換、空集合停止、client 自主 retry 的 epoch 交付、continuation 所有權、epoch 安裝與 consumer barrier。
+
+**不要**在現有三個 method 上做第五次增補。
 
 ### Phase 3: 實作 — 專案骨架與資料層
 - [ ] `Models.swift` — §3 的 persisted/runtime types、雙 venue mapping、alerts 與 `Sendable` 邊界
