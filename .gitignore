@@ -1,0 +1,10 @@
+# Codex delegation intermediates (drafts, dispatch logs, verdicts).
+# thread_ledger.txt lives here too but is regenerable; the durable record of
+# review outcomes belongs in findings.md, not in this directory.
+.codex-review/
+
+# Build output — the app bundle is assembled by scripts/build-app.sh
+build/
+
+# macOS
+.DS_Store
