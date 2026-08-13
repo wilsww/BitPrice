@@ -846,6 +846,143 @@ revision 4.2 給了 `reconnect()` 回傳值，卻沒給它參數。§4.1 寫「c
 
 結論：這個介面已經連補四輪，每輪修出下一輪的 blocker。不應再做第五次局部修補。兩個 lens 在 `what_would_change_my_mind` 各自獨立提出同一個建議 —— 合併成單一 lifecycle contract，一次涵蓋 start、set 變更、retry、epoch 交付。**已轉為 Phase 2.17，另開 session 進行。**
 
+## Revision 4.3：串流介面整體重設計（2026-08-13）
+
+不是修 round-7 的 20 項清單，是判定其中 3 項（2 blocker + 靜默迴圈 major）根本是**同一個缺陷**，然後把產生它的介面整段刪掉重寫。
+
+### 根因
+
+四輪都在補 `events(for:)` / `reconnect()` / `currentEpoch()` 三個 method。真正的問題不在任何一個 method，而在：
+
+> **`AppModel` 持有授權狀態（current epoch），卻必須從一個會自行改變該狀態的元件帶外取得。**
+
+回傳值永遠補不上這個縫，因為 client 自主 retry 不經由回傳路徑。round-7 blocker 2 就是這條：為堵循環論證而寫的 `currentEpoch()` 禁令，同時關掉了唯一合法路徑，Binance 復原永久卡死。
+
+三個 blocker 的共同形狀（findings.md:839 已記錄）在此被移除，而非再補一次。
+
+### 修法
+
+| 舊 | 新 |
+|---|---|
+| `events(for productIDs:) -> AsyncStream` | `events() -> AsyncStream`（終身單一，永不終止） |
+| `reconnect() -> UUID` | `reconnectForHealth()`（無回傳值） |
+| `currentEpoch()`、`stop()` | 刪除。停止 = `setProducts([])` |
+| — | `setProducts(_:)`：start / 換集合 / 空集合停止三合一，idempotent |
+| `FeedEvent.epoch: UUID` | 刪除。改 `case superseded` |
+
+**關鍵替換**：consumer 端 epoch 比對 → **in-band ordered barrier**。新舊由「在單一有序 stream 中的位置」判定，不由跨 actor 的識別碼比對判定。`AsyncStream` 本就保證順序；跨 actor 識別碼一致性則否 —— 這正是舊設計 handoff 非原子（A#2/B#2）的成因。
+
+epoch 仍存在，但**只在 actor 內**作為連線身分，不跨界。
+
+### 三個 blocker 為何從結構上消失
+
+1. **blocker 1**（`reconnect()` 收不到 product 集合）：只剩一個入口 `setProducts`，它必然收集合
+2. **blocker 2**（自主 retry 的 epoch 無管道）：沒有 epoch 需要傳遞。自主 retry 與外部呼叫走同一條 supersede 路徑
+3. **靜默迴圈 major**：counter reset 條件改為「**所有**訂閱 product 都收到有效 tick」。單一活著的 product 不再替永久靜默的鄰居歸零 counter
+
+### 順帶併入的 C 群兩項
+
+因為與生命週期耦合，先修會被重設計改掉：
+
+- **B#5** empty→nonempty 重啟：週期迴圈改 gate 於 watchlist 而非 Binance set（純 Coinbase 清單的 Binance set 為空但仍需輪詢）
+- **A#6** 重複 venue product ID：入口即拒絕，tick 遞送維持 lookup 而非 fan-out，per-product staleness 的 key 因此無歧義
+
+### 審查結果：兩個 lens 都判 REJECT（run `r43b`，2026-08-13）
+
+design-review 雙 lens，focus 明列前四輪失敗形狀並要求機械性查證每個機制的 input 來源與粒度。lensA 5 項、lensB 6 項，全 `true_hit`。**重設計方向對、執行錯。**
+
+委派過程註記：runner 印 `CODEX_FAIL|runner|0/0|project_files_modified`，但查證後為誤報 —— 變更的三個檔案是我 dispatch 前的編輯（`IMPLEMENTATION.md` mtime 19:17 早於 dispatch 19:18），lensB 另建了 `.planning/lensb_r43b/`（plugin skill 自動觸發，已刪）。**受審 artifact 全程未被動過**，verdict 可信。
+
+#### 致命項：`.superseded` barrier 不成立（lensA #1、lensB #1，獨立收斂）
+
+buffer 為 `ticker(old), superseded, connected(new)`，consumer 一次讀一個。讀到 `ticker(old)` 時 barrier 尚未讀到，只有兩種選擇：
+
+- 立即 commit → 髒資料進 published state
+- 全部緩著等 barrier → 但「之後不會再有 barrier」**不可知**，最後一批正常資料永遠發不出去
+
+且 `AsyncStream.Continuation` **沒有 purge 已 buffer 值的 API**。我假設了一個 Swift 不提供的操作。
+
+**形狀與前四輪完全相同：文字讀起來成立，介面 supply 不了。這是第五次。**
+
+#### 我自己造成的殘留矛盾（已機械查證屬實）
+
+| 位置 | 內容 | 與什麼矛盾 |
+|---|---|---|
+| §6 item 2（`IMPLEMENTATION.md:871`） | "epoch stamped on every `FeedEvent`... reaches `AppModel`" | 我新寫的 §3「carries **no** epoch」 |
+| §2.2（`IMPLEMENTATION.md:89`） | "Compare the old and new sets on every watchlist change" | 我新寫的 §4.1「`AppModel` does not compare sets itself」 |
+
+改了 §4.3/§4.1/§3 的 epoch 段落，漏掉 §6 與 §2.2 開頭。典型修訂殘留。
+
+#### 其餘
+
+- **`reconnectForHealth()` 無參數不可能 idempotent**（A#3、B#2）：無 identity 綁定要修的連線，delayed duplicate 會拆掉已健康的後繼連線。**與 round-7 blocker 1「`reconnect()` 沒參數」是同一種病，我換了名字沒換病**
+- **AppModel 無法從已讀事件判斷 connected/connecting/backing-off**（A#2、B#3）：刪了 `currentEpoch()` 卻仍要求呼叫端知道連線狀態；§4.3.5 又提到一個 §2.2 其實沒定義的 circuit-breaker 條件
+- **低成交量 product 被當成死的**（A#4、B#5）：90 秒一筆 tick 的合法市場永遠湊不齊「所有 product 都 tick 過」，counter 永不 reset，且換 product 集合不 reset 會把懲罰帶到不相干的新集合
+- **§2.2 vs §4.1/test 29 caller 契約互斥**（B#6）
+
+#### 修正方向（兩個 lens 的 `what_would_change_my_mind` 再次獨立指向同一點）
+
+**讓 connection identity 在「消費當下」即可得**，而非靠事後 barrier 或事前回傳值。
+
+這意味 round-7 錯的**不是**「事件帶 epoch」，而是「AppModel 必須帶外取得授權 epoch」。正確解：事件帶 identity，但 AppModel **不需預先知道哪個合法** —— 它跟隨最新見到的 identity，由 actor 保證只有活著的連線能 yield。`reconnectForHealth(expecting:)` 帶上 identity，actor 內比對後拒絕過期請求。
+
+**尚未實作。此方向未經審查。**
+
+## `SPEC.md` 獨立複審（2026-08-13，run `spec1`，全新 thread，`--web-search`）
+
+`CODEX_DONE`，雙 lens 各自獨立。**兩者都判 reject。** lensA 8 項（6 blocking、2 major），lensB 7 項（6 blocking、1 major）。委派本身乾淨：verdict 正常升為 final 檔名，無 contamination 誤報。
+
+**四項獨立收斂**（兩 lens 各自提出、我已逐一對照檔案查證屬實）：
+
+### 1. `taskIdentifier` 唯一性範圍小於它被用來證明的東西（A#2、B#1）— blocking
+
+`SPEC.md` 用 delegate 傳回的整數 `taskIdentifier` 做授權檢查，但 Apple 明文規定它**只在單一 `URLSession` 內唯一**，而規格從未要求 controller 持有終身單一 session。lensA 還做了實測：兩個 session 的第一個 WebSocket task 都拿到 `1`。
+
+後果：session A 的舊 close callback 帶著 `1`，session B 的當前 task 也是 `1` → 舊回呼通過檢查、把健康的替代連線標記失敗。
+
+**這正是第六次同一形狀** —— 用來證明身分的 state，粒度比它要證明的條件粗。
+
+### 2. 建構與注入介面完全缺席（A#3、B#2）— blocking
+
+§3.3 步驟 5 寫「attach `AppModel` as the Binance sink」，但 §5.1 自稱窮舉的公開介面**沒有任何 sink initializer、property 或 attach method**。§12 又要求注入 clocks、mock URL loading、臨時 support root、可控 socket adapter —— 全都沒有對應介面。
+
+實作者必須先發明 API 才能編譯規格所描述的啟動流程。**規格自己的 accountability 規則要求指名 interface member，這裡指不出來。**
+
+### 3. Coinbase 無 client-wide 限流，且每小時 100 requests 的算術是錯的（A#6、B#5）— blocking
+
+25 檔 Coinbase-only 清單啟動時同時發 25 stats + 25 candles = 50 requests，而 Coinbase 公開限額是 **10 req/s、burst 15**。逐一新增則是 1+2+…+25 = **325** 次 candle 呼叫。反覆 wake 則完全沒有上界。
+
+§13 宣稱「至多 100 requests/hour」為假。這是我上一輪**誇讚它「代價寫得很清楚」的那一項** —— 代價寫了，但算錯了。
+
+### 4. §6.1 與 §12 test 15 對 Coinbase `open` 缺失的要求互斥（A#8、B#7）
+
+§6.1（`SPEC.md:366`）要求 malformed decimal / null 必填欄位 → 拒絕回應並保留舊資料；test 15（`SPEC.md:602`）要求 missing/invalid open → 顯示 `—`。無先前報價時兩者無法同時滿足。
+
+### 其他 blocking（單一 lens，已查證）
+
+- **B#4：test 6 要求一個不可能存在的 fixture**。§4.1 明寫 current schema version 為 `1`，故 `0 < version < 1` **無整數解**，但 test 6 要求「unregistered older positive version」fixture。規格自我否證
+- **A#5、B#4：v0 wire schema 未定義**。只有 v1 root 三個 key 精確，nested `WatchItem`/mapping/provenance/alert 的 key、enum 表示、Decimal 表示全是散文。兩個實作者會做出互不相容的 JSON，且無人能導出 test 6 要求的「actual v0 fixture」
+- **A#1：candle 回應無 request 授權**。`FallbackRequestToken` 只保護 Coinbase stats，chart 請求沒有等價 token → remap/刪除/sleep/較新刷新之後，舊 candle 回應仍會被套用。**這與它自己解掉的 B#6 是同一種缺陷，只是換到 chart 路徑**
+- **A#4：`URLRequest.timeoutInterval` 不是總時限**。Apple 定義為 idle timeout，資料持續涓滴會重置計時器。§9 與 test 17 宣稱的 15 秒總時限對 search/candidate/candle 三條路徑都不成立（只有 Coinbase fallback 另有 elapsed check）
+
+### major
+
+- **B#6：retry counter 在 set 變更與 wake 時 reset，但 DNS/TLS/geo-block/Binance 停機是 connection-wide**。停機期間每次加減幣或 wake 都把 attempts 歸零 → §13 宣稱的「每 30 秒一次」不成立
+- **A#7：fallback 列可能顯示 Coinbase/USD 報價，旁邊配 Binance/USDT 的圖，且圖無來源標示**
+
+### 判定與觀察
+
+**方向仍然正確** —— 五個舊失敗形狀確實結構性消失（無 `AsyncStream`、無 epoch 跨界、無外部 reconnect、無 handoff、product 靜默不觸發修復），兩個 lens 都沒有推翻主架構。§4.3 root validator、`flock`、debounce 刪除也都成立，`flock` 與 Coinbase candles 兩項可證偽主張未被推翻。
+
+**但換了作者並未換掉失敗形狀。** 六個 blocking 中至少三個是同一個形狀的新實例：
+- `taskIdentifier` 粒度不足以證明 connection identity
+- sink/注入介面在 §11 ledger 宣稱有、實際指不出來
+- candle 路徑缺 token，而同一份文件已在 fallback 路徑解掉這個問題
+
+**這說明形狀不是某個 agent 的缺點，是這類規格本身的難度。** 寫得越完整，未指名的介面缺口越多。
+
+**結論：不再修訂第七次。** 這六個 blocking 全部是「實作第一天就會撞到並且立刻知道答案」的類型 —— 缺 initializer、缺 token、schema 未定、限流未定。紙上再推一輪只會產出 round-9。改為**帶著這份清單開工**，由編譯器與測試取代 review 當驗證來源。
+
 ## 資源
 
 - CoinGecko API 定價：https://www.coingecko.com/en/api/pricing

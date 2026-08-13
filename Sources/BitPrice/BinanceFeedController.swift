@@ -1,0 +1,290 @@
+import Foundation
+
+private struct BinanceCombinedTicker: Decodable {
+    let stream: String
+    let data: Ticker
+
+    struct Ticker: Decodable {
+        let symbol: String
+        let close: String
+        let percent: String
+        let eventTime: Int64
+
+        enum CodingKeys: String, CodingKey {
+            case symbol = "s"
+            case close = "c"
+            case percent = "P"
+            case eventTime = "E"
+        }
+    }
+}
+
+@MainActor
+final class BinanceFeedController {
+    private weak var sink: (any BinanceFeedSink)?
+    private let continuousClock: any ContinuousTimeSource
+    private let suspendingClock: any SuspendingTimeSource
+    private let delegateAdapter: WebSocketDelegateAdapter
+    private var session: (any WebSocketSessionTransport)?
+
+    private(set) var state: BinanceLifecycle = .stopped
+    private(set) var currentProductIDs: Set<String> = []
+    private(set) var configurationID = UUID()
+    private(set) var connectionID = UUID()
+    private(set) var currentTaskIdentifier: Int?
+    private(set) var transportFailureAttempt = 0
+
+    private var taskConnectionRegistry: [Int: UUID] = [:]
+    private var currentSocket: (any WebSocketTaskTransport)?
+    private var receiveTask: Task<Void, Never>?
+    private var leaseTask: Task<Void, Never>?
+    private var retryTask: Task<Void, Never>?
+    private var openedAt: MonotonicInstant?
+    private var isAwake = true
+    private var isShutdown = false
+
+    init(
+        sessionFactory: any WebSocketSessionFactory,
+        continuousClock: any ContinuousTimeSource,
+        suspendingClock: any SuspendingTimeSource,
+        sink: (any BinanceFeedSink)? = nil
+    ) {
+        self.continuousClock = continuousClock
+        self.suspendingClock = suspendingClock
+        self.sink = sink
+        let adapter = WebSocketDelegateAdapter()
+        delegateAdapter = adapter
+        adapter.attach(controller: self)
+        // One session is created once, reused for every connection, and invalidated only
+        // by shutdown. taskIdentifier is therefore never treated as a global identity.
+        session = sessionFactory.makeLifetimeSession(delegate: adapter)
+    }
+
+    func attachSink(_ sink: any BinanceFeedSink) {
+        self.sink = sink
+        sink.feedStateDidChange(state)
+    }
+
+    func replaceProducts(_ productIDs: Set<String>) {
+        guard !isShutdown else { return }
+        let normalized = Set(productIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() })
+        guard normalized != currentProductIDs else { return }
+        configurationID = UUID()
+        invalidateConnection()
+        currentProductIDs = normalized
+        guard !normalized.isEmpty else {
+            transition(to: .stopped)
+            return
+        }
+        guard isAwake else {
+            transition(to: .suspended)
+            return
+        }
+        // A changed subscription may reconnect promptly, but transportFailureAttempt is
+        // deliberately client-wide and survives set churn (defect 9).
+        connect(configurationID: configurationID, reservedConnectionID: connectionID)
+    }
+
+    func suspendForSleep() {
+        guard !isShutdown else { return }
+        isAwake = false
+        invalidateConnection()
+        transition(to: currentProductIDs.isEmpty ? .stopped : .suspended)
+    }
+
+    func resumeAfterWake() {
+        guard !isShutdown else { return }
+        isAwake = true
+        guard !currentProductIDs.isEmpty else {
+            transition(to: .stopped)
+            return
+        }
+        invalidateConnection()
+        // Wake is immediate but does not erase outage history.
+        connect(configurationID: configurationID, reservedConnectionID: connectionID)
+    }
+
+    func shutdown() {
+        guard !isShutdown else { return }
+        isShutdown = true
+        currentProductIDs = []
+        invalidateConnection()
+        session?.invalidate()
+        session = nil
+        transition(to: .stopped)
+    }
+
+    func didOpen(taskIdentifier: Int, connectionID callbackConnectionID: UUID) {
+        guard callbackIsCurrent(taskIdentifier: taskIdentifier, connectionID: callbackConnectionID),
+              state == .connecting else { return }
+        openedAt = suspendingClock.now()
+        transition(to: .connected)
+    }
+
+    func didClose(taskIdentifier: Int, connectionID callbackConnectionID: UUID, failure: NetworkFailure) {
+        failCurrent(expectedConnectionID: callbackConnectionID, taskIdentifier: taskIdentifier, failure: failure)
+    }
+
+    private func connect(configurationID expectedConfigurationID: UUID, reservedConnectionID: UUID) {
+        guard isAwake, !isShutdown, !currentProductIDs.isEmpty,
+              configurationID == expectedConfigurationID,
+              connectionID == reservedConnectionID,
+              let url = binanceCombinedStreamURL(productIDs: currentProductIDs),
+              url.absoluteString.utf8.count <= maximumCombinedStreamURLBytes,
+              let session else { return }
+
+        receiveTask?.cancel()
+        leaseTask?.cancel()
+        retryTask?.cancel()
+        retryTask = nil
+        let socket = session.makeTask(url: url)
+        socket.maximumMessageSize = maximumWebSocketMessageBytes
+        let taskIdentifier = socket.taskIdentifier
+        currentSocket = socket
+        currentTaskIdentifier = taskIdentifier
+        taskConnectionRegistry[taskIdentifier] = reservedConnectionID
+        delegateAdapter.register(taskIdentifier: taskIdentifier, connectionID: reservedConnectionID)
+        openedAt = nil
+        transition(to: .connecting)
+        socket.resume()
+        startReceive(
+            socket: socket,
+            configurationID: expectedConfigurationID,
+            connectionID: reservedConnectionID,
+            taskIdentifier: taskIdentifier
+        )
+        startLease(
+            configurationID: expectedConfigurationID,
+            connectionID: reservedConnectionID,
+            taskIdentifier: taskIdentifier
+        )
+    }
+
+    private func startReceive(
+        socket: any WebSocketTaskTransport,
+        configurationID expectedConfigurationID: UUID,
+        connectionID expectedConnectionID: UUID,
+        taskIdentifier: Int
+    ) {
+        receiveTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                do {
+                    let message = try await socket.receive()
+                    guard self.configurationID == expectedConfigurationID,
+                          self.callbackIsCurrent(taskIdentifier: taskIdentifier, connectionID: expectedConnectionID) else { return }
+                    self.accept(message, expectedConnectionID: expectedConnectionID, taskIdentifier: taskIdentifier)
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    let failure = NetworkFailure.wrapping(error, domain: "websocket-receive")
+                    guard self.configurationID == expectedConfigurationID else { return }
+                    self.failCurrent(expectedConnectionID: expectedConnectionID, taskIdentifier: taskIdentifier, failure: failure)
+                    return
+                }
+            }
+        }
+    }
+
+    private func startLease(configurationID expectedConfigurationID: UUID, connectionID expectedConnectionID: UUID, taskIdentifier: Int) {
+        leaseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do { try await self.suspendingClock.sleep(for: 300) } catch { return }
+            guard self.configurationID == expectedConfigurationID,
+                  self.callbackIsCurrent(taskIdentifier: taskIdentifier, connectionID: expectedConnectionID) else { return }
+            if let openedAt = self.openedAt,
+               self.suspendingClock.now().seconds(since: openedAt) >= 60 {
+                self.transportFailureAttempt = 0
+            }
+            self.rotateCurrent(configurationID: expectedConfigurationID, connectionID: expectedConnectionID, taskIdentifier: taskIdentifier)
+        }
+    }
+
+    private func rotateCurrent(configurationID expectedConfigurationID: UUID, connectionID expectedConnectionID: UUID, taskIdentifier: Int) {
+        guard configurationID == expectedConfigurationID,
+              callbackIsCurrent(taskIdentifier: taskIdentifier, connectionID: expectedConnectionID) else { return }
+        invalidateConnection()
+        connect(configurationID: expectedConfigurationID, reservedConnectionID: connectionID)
+    }
+
+    private func failCurrent(expectedConnectionID: UUID, taskIdentifier: Int, failure: NetworkFailure) {
+        guard callbackIsCurrent(taskIdentifier: taskIdentifier, connectionID: expectedConnectionID),
+              state == .connecting || state == .connected else { return }
+        let expectedConfigurationID = configurationID
+        invalidateConnection()
+        guard isAwake, !isShutdown, !currentProductIDs.isEmpty else {
+            transition(to: currentProductIDs.isEmpty ? .stopped : .suspended)
+            return
+        }
+        let delays: [TimeInterval] = [1, 2, 4, 8, 16, 30]
+        let index = min(transportFailureAttempt, delays.count - 1)
+        let delay = delays[index]
+        transportFailureAttempt = min(transportFailureAttempt + 1, delays.count - 1)
+        let successor = connectionID
+        transition(to: .backingOff(attempt: transportFailureAttempt, delay: delay))
+        retryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do { try await self.suspendingClock.sleep(for: delay) } catch { return }
+            guard self.configurationID == expectedConfigurationID,
+                  self.connectionID == successor,
+                  self.isAwake, !self.isShutdown, !self.currentProductIDs.isEmpty else { return }
+            self.connect(configurationID: expectedConfigurationID, reservedConnectionID: successor)
+        }
+        _ = failure
+    }
+
+    private func accept(_ message: WebSocketInboundMessage, expectedConnectionID: UUID, taskIdentifier: Int) {
+        guard state == .connected,
+              callbackIsCurrent(taskIdentifier: taskIdentifier, connectionID: expectedConnectionID) else { return }
+        let data: Data
+        switch message {
+        case .string(let value): data = Data(value.utf8)
+        case .data(let value): data = value
+        }
+        guard data.count <= maximumWebSocketMessageBytes,
+              let wrapper = try? JSONDecoder().decode(BinanceCombinedTicker.self, from: data),
+              currentProductIDs.contains(wrapper.data.symbol),
+              wrapper.stream == wrapper.data.symbol.lowercased() + "@ticker",
+              let price = positiveDecimal(from: wrapper.data.close),
+              let percent = finiteDecimal(from: wrapper.data.percent),
+              wrapper.data.eventTime >= 0 else { return }
+        let tick = BinanceTick(
+            productID: wrapper.data.symbol,
+            price: price,
+            changePercent: percent,
+            eventDate: Date(timeIntervalSince1970: TimeInterval(wrapper.data.eventTime) / 1_000),
+            receivedInstant: continuousClock.now()
+        )
+        guard callbackIsCurrent(taskIdentifier: taskIdentifier, connectionID: expectedConnectionID) else { return }
+        sink?.feedDidAccept(tick)
+    }
+
+    private func callbackIsCurrent(taskIdentifier: Int, connectionID expectedConnectionID: UUID) -> Bool {
+        currentTaskIdentifier == taskIdentifier &&
+            connectionID == expectedConnectionID &&
+            taskConnectionRegistry[taskIdentifier] == expectedConnectionID
+    }
+
+    private func invalidateConnection() {
+        connectionID = UUID()
+        receiveTask?.cancel()
+        leaseTask?.cancel()
+        retryTask?.cancel()
+        receiveTask = nil
+        leaseTask = nil
+        retryTask = nil
+        if let taskIdentifier = currentTaskIdentifier,
+           let registeredConnection = taskConnectionRegistry.removeValue(forKey: taskIdentifier) {
+            delegateAdapter.unregister(taskIdentifier: taskIdentifier, connectionID: registeredConnection)
+        }
+        currentTaskIdentifier = nil
+        openedAt = nil
+        currentSocket?.cancel()
+        currentSocket = nil
+    }
+
+    private func transition(to newState: BinanceLifecycle) {
+        guard state != newState else { return }
+        state = newState
+        sink?.feedStateDidChange(newState)
+    }
+}

@@ -211,9 +211,9 @@ Round-7 兩個 lens 被中止前未產出 verdict，但其工作筆記已抓到 
 - [x] 修正 test 24/26 的 60 秒邊界（演算法為嚴格大於，測試卻要求剛好 60 秒即重連）
 - [x] `PriceAlert` 的 `decodeIfPresent(isArmed) ?? false` 限定只作用於 schemaVersion 0
 - [x] §4.2 補上「unrecognized older version 進入 read-only recovery」，與 §3 第四分支對齊
-- [ ] **FLAG — 串流介面整體重設計**（見下）
-- [ ] FLAG — 其餘既存 major/minor（watchlist 上限、termination flush、empty→nonempty 重啟、Coinbase late response、root invariant 驗證、sparkline 24 小時保證、重複 venue product ID、單一實例 atomicity）
-- **狀態:** in progress（短項已補；兩個 FLAG 另開 session）
+- [x] **FLAG — 串流介面整體重設計** → 已於 Phase 2.18 完成
+- [ ] FLAG — 其餘既存 major/minor 中未被重設計涵蓋者（watchlist 上限、termination flush、Coinbase late response、root invariant 驗證、sparkline 24 小時保證、單一實例 atomicity）→ **改列為實作期風險清單**，不再於紙上修訂
+- **狀態:** complete（短項已補；串流重設計見 Phase 2.18）
 
 #### FLAG：串流介面必須整體重設計，不得再局部修補
 
@@ -228,7 +228,105 @@ Round-7 兩個 lens 被中止前未產出 verdict，但其工作筆記已抓到 
 
 **不要**在現有三個 method 上做第五次增補。
 
-### Phase 3: 實作 — 專案骨架與資料層
+### Phase 2.18: 串流介面整體重設計（revision 4.3）
+不是第五次局部修補。§4.3 整段刪除重寫，§4.1/§4.1.1/§2.2/§3 同步改。
+
+**根因判定**：三個 blocker 不是三個缺陷，是同一個。`AppModel` **持有授權狀態**（current epoch），卻必須從一個會自行改變該狀態的元件**帶外取得**。回傳值永遠補不上這個縫，因為該元件不是每次都經由回傳路徑。
+
+- [x] 授權移入 actor 內。`AppModel` 不再持有 epoch、不做任何 epoch 比對
+- [x] 三 method 改為三個**意圖**：`setProducts(_:)`（start / 換集合 / 空集合停止，三合一且 idempotent）、`events()`（終身單一 stream）、`reconnectForHealth()`（無回傳值）
+- [x] 刪除 `currentEpoch()`、`stop()`、`FeedEvent.epoch`
+- [x] 新增 `.superseded` **in-band ordered barrier** 取代 consumer 端過濾 — 靠 stream 順序判定新舊，不靠跨 actor 的識別碼比對。`AsyncStream` 本就保證順序，跨 actor 識別碼一致性則否
+- [x] 自主 retry 與外部呼叫走同一條 supersede 路徑，因此不需要任何管道回傳 epoch → blocker 2 從結構上消失
+- [x] retry counter 粒度改為「**所有**訂閱 product 都收到有效 tick 才 reset」→ 靜默迴圈 major 消失
+- [x] §4.1 改為每次 watchlist 變更都呼叫 `setProducts`，抑制重連由 idempotent 契約保證，不再是呼叫端的前置條件（呼叫端版本正是「重連舊 URL」的來源）
+- [x] 併入 B#5（empty→nonempty 重啟）：週期迴圈改 gate 於 watchlist 而非 Binance set
+- [x] 併入 A#6（重複 venue product ID）：入口即拒絕，tick 遞送維持 lookup 而非 fan-out
+- [x] tests 24/25/28/29 改寫 + 新增 29a（自主 retry 復原）、29b（空集合生命週期）、29c（重複 product ID）
+- [x] 委派 Codex 審查此契約（run `r43b`）— 唯一被證實有效的防線
+- [x] **審查判 REJECT**（兩 lens 獨立收斂）。`.superseded` barrier 依賴 `AsyncStream` 不存在的 purge 能力；`reconnectForHealth()` 無參數不可能 idempotent；另有兩處我自己造成的殘留矛盾（§6 item 2、§2.2:89）。全文見 `findings.md`
+- **狀態:** rejected — 需第二版契約
+- **注意**：本次刻意**不**逐條修 20 項清單。C 群其餘 6 項轉為實作期風險清單
+- **教訓（第五次同一形狀）**：我把授權移進 actor（方向正確），但選的替代機制假設了一個語言不提供的操作。**寫契約時必須逐一指出每個機制由哪個具體 API 提供**，不能只寫「barrier 會處理」。這次是**審查擋下的，不是自己看出來的** —— 再次印證 findings.md:845
+
+### Phase 2.19: 委派 Codex 從零重新設計 → `SPEC.md`（2026-08-13）
+不再由主 agent 寫契約。理由：同一介面連續五次自我引入缺陷，無任何一次通過紀錄；寫的人不能當審的人，而我已證明是這介面上最不適合寫的人。
+
+`run_id=rd1`，implement mode，`--expect-changed` 三檔驗收。Codex 用自己的 planning-with-files 產出 `.planning/redesign/{task_plan,findings,progress}.md`，交付物為 **`SPEC.md`（638 行）**。
+
+- [x] Brief 把失敗形狀寫成**結構性約束**而非警告：每個機制必須指名哪個 interface member 提供每個 input、哪個 platform API 執行每個操作，指不出來就重新設計
+- [x] 今天兩份 lens verdict 列為必讀輸入（`what_would_change_my_mind` 為最有價值部分）
+- [x] 實測事實列為不可協商；venue confirmation 明列為使用者已裁決、不得再翻
+- [x] 驗證 Codex 未動 `IMPLEMENTATION.md` 與根目錄三份規劃檔（mtime 全部早於 dispatch 20:19）
+- **狀態:** complete（待獨立複審）
+
+#### 架構轉向：消滅問題而非修補
+
+| 舊設計 | `SPEC.md` |
+|---|---|
+| `BinanceStreamClient` 為獨立 actor + `AsyncStream` | `BinanceFeedController` 與 `AppModel` **同屬 `@MainActor`**，無 `AsyncStream`、無 continuation |
+| epoch 跨 actor 交付 | identity 留在 controller 內；每個 `await` 後、每次 mutation 前比對 captured vs current |
+| `reconnectForHealth()` 外部呼叫 | **無此 method**。lease 與 retry 全在 controller 內完成 |
+| 60 秒無 tick 判定 product 已死 | **刪除**。改 5 分鐘 lease 無條件輪替，明寫是 bound 不是 detector |
+| CoinGecko 批次 sparkline | **刪除**。改有時間戳的 1h K 線（Binance klines / Coinbase candles） |
+| 500 ms debounce | **刪除**。每次編輯即時 full-state atomic write |
+| `NSRunningApplication` check-then-act | `flock(LOCK_EX \| LOCK_NB)` |
+
+關鍵順序：**新 identity 同步安裝完成後才取消舊工作**。舊 `receive()` 晚到能抵達 main actor，但在套用 quote 前就失敗於 identity check。**沒有 app 層 buffer 需要清除** —— 前次 blocker（`AsyncStream` 無 purge API）因此不存在。
+
+#### 五次失敗形狀逐一結構性消失
+
+1. 介面無參數傳 product 集合 → 只剩 `replaceProducts(_:)` 一個入口，必然收集合
+2. 自主 retry 的 epoch 無管道 → 無 epoch 跨界；自主 retry 用同一組 current-ID check
+3. counter 粒度 session vs 需偵測 per-product → **product 靜默完全不再觸發修復**，counter 改為 connection-level（lease 完成 + delegate-open 滿 60 秒才 reset）
+4. handoff 非原子 → 同一 actor，無 handoff
+5. 假設 `AsyncStream` 有 purge → 無 stream
+
+#### round-7 六項未修缺陷：全部逐項查證已解（非接受）
+
+watchlist 上限 25、termination flush（debounce 刪除故窗口不存在）、Coinbase late response（`FallbackRequestToken` 五欄位 + 15 秒 elapsed check）、root invariant（§4.3 十二條驗證器，違反者進 recovery 不靜默修復）、sparkline 24 小時（改時間戳 K 線）、單一實例 atomicity（`flock`）。
+
+- [ ] **獨立複審 `SPEC.md`** — 未做。Codex 寫的，Codex 不能自審
+- **教訓**：這次真正換了寫的人。前五次都是「同一個 agent 修自己的介面」，第六次換手後，五個缺陷是**被結構消滅**而非被補丁
+
+### Phase 2.20: `SPEC.md` 獨立複審 → reject（run `spec1`）
+全新 thread、雙 lens、`--web-search`。lensA 8 項、lensB 7 項，**四項獨立收斂**，全部經我對照檔案查證屬實。判定與全文見 `findings.md`。
+
+主架構未被推翻（五個舊失敗形狀確實結構性消失），但六個 blocking 中至少三個是同一形狀的新實例 —— 換作者未換掉形狀。決定**不再修訂第七次**，改帶清單開工。
+
+- **狀態:** complete
+
+### Phase 3–4: 實作（委派 Codex，run `impl1`，2026-08-13）
+15 項複審缺陷**前置為建置需求**，非事後待辦。修法逐項取自兩個 lens 的 `what_would_change_my_mind`。
+
+- [x] 11 個 source 檔（2,841 行）+ `Info.plist` + `scripts/build-app.sh` + `scripts/run-tests.sh`
+- [x] `Tests/TestMain.swift`（578 行）+ 真實 v0/v1 JSON fixture
+- [x] `.planning/impl/{task_plan,findings,progress}.md`
+- **狀態:** complete
+
+#### 我獨立驗收的結果（非採信 Codex 報告）
+
+| 驗收項 | 指令 | 結果 |
+|---|---|---|
+| 乾淨樹嚴格建置 | `rm -rf build && bash scripts/build-app.sh` | **exit 0** |
+| 測試 | `bash scripts/run-tests.sh` | **25 passed, 0 failed, 2 skipped**（skip 皆印出理由） |
+| 嚴格模式確實啟用 | grep build script | `-swift-version 6`、`warnings-as-errors`、`-target arm64-apple-macosx14.0` |
+| SwiftPM 未被使用 | grep `swift build` / `Package.swift` | 全無 |
+| bundle 真實性 | `codesign --verify --strict` / `plutil -lint` / `file` | 全通過，Mach-O arm64 |
+| bundle metadata | `plutil -extract` | `LSUIElement=true`、`LSMinimumSystemVersion=14.0` |
+| 保護檔案未被動 | mtime vs dispatch 21:04 | 四檔全部早於 dispatch |
+
+#### 15 項缺陷抽查（讀碼確認）
+
+- **缺陷 1**：`makeLifetimeSession` 一次建立終身重用；`didOpen`/`didClose` 皆帶 `connectionID: UUID`，整數不再是唯一憑證
+- **缺陷 3**：`actor TokenBucketPacer`，Coinbase `ratePerSecond: 10, burst: 15`（與官方文件一致），Binance/CoinGecko 各自實例，clock 為注入
+- **缺陷 6**：`Tests/Fixtures/watchlist-v0.json`、`watchlist-v1.json` 真實存在
+
+#### 未能驗證（本機限制，Codex 誠實聲明未謊報）
+
+無 Aqua GUI session → 無法啟動 app、無法驗證通知呈現、無 live network smoke test。測試以注入 fake 完成 deterministic 驗證。
+
+### Phase 3（原）: 實作 — 專案骨架與資料層
 - [ ] `Models.swift` — §3 的 persisted/runtime types、雙 venue mapping、alerts 與 `Sendable` 邊界
 - [ ] `PersistenceStore.swift` — Application Support JSON、首次 BTC seed、空清單、損壞檔案復原與 durable alert latch
 - [ ] `BinanceStreamClient.swift` — combined-stream WebSocket、session UUID、idempotent reconnect 與 capped backoff

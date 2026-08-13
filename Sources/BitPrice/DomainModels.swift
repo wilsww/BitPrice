@@ -1,0 +1,456 @@
+import Foundation
+
+let currentSchemaVersion = 1
+let maximumWatchlistCount = 25
+let maximumCombinedStreamURLBytes = 2_048
+let maximumHTTPBodyBytes = 64 * 1_024 * 1_024
+let maximumWebSocketMessageBytes = 1 * 1_024 * 1_024
+
+enum Venue: String, Codable, Sendable, CaseIterable {
+    case binance
+    case coinbase
+}
+
+enum MappingProvenance: String, Codable, Sendable {
+    case builtInBTC
+    case userConfirmedTickerMatch
+}
+
+struct VenueMapping: Codable, Equatable, Sendable {
+    let exchange: Venue
+    let productID: String
+    let baseAsset: String
+    let quoteAsset: String
+    let provenance: MappingProvenance
+}
+
+enum AlertDirection: String, Codable, Sendable {
+    case above
+    case below
+}
+
+struct PriceAlert: Codable, Equatable, Sendable {
+    var direction: AlertDirection
+    var threshold: Decimal
+    var cooldownSeconds: Int
+    var hysteresisPercent: Decimal
+    var isEnabled: Bool
+    var isArmed: Bool
+    var lastFiredAt: Date?
+}
+
+struct WatchItem: Codable, Equatable, Identifiable, Sendable {
+    let id: UUID
+    let coinGeckoID: String
+    var symbol: String
+    var name: String
+    var binanceMapping: VenueMapping?
+    var coinbaseMapping: VenueMapping?
+    var alert: PriceAlert?
+}
+
+struct PersistedState: Codable, Equatable, Sendable {
+    let schemaVersion: Int
+    var items: [WatchItem]
+    var primaryItemID: UUID?
+
+    static func bitcoinSeed(id: UUID = UUID()) -> PersistedState {
+        let binance = VenueMapping(
+            exchange: .binance,
+            productID: "BTCUSDT",
+            baseAsset: "BTC",
+            quoteAsset: "USDT",
+            provenance: .builtInBTC
+        )
+        let coinbase = VenueMapping(
+            exchange: .coinbase,
+            productID: "BTC-USD",
+            baseAsset: "BTC",
+            quoteAsset: "USD",
+            provenance: .builtInBTC
+        )
+        let item = WatchItem(
+            id: id,
+            coinGeckoID: "bitcoin",
+            symbol: "BTC",
+            name: "Bitcoin",
+            binanceMapping: binance,
+            coinbaseMapping: coinbase,
+            alert: nil
+        )
+        return PersistedState(schemaVersion: currentSchemaVersion, items: [item], primaryItemID: id)
+    }
+}
+
+struct MonotonicInstant: Sendable, Comparable, Hashable {
+    let offset: Duration
+
+    static func < (lhs: MonotonicInstant, rhs: MonotonicInstant) -> Bool {
+        lhs.offset < rhs.offset
+    }
+
+    func advanced(by seconds: TimeInterval) -> MonotonicInstant {
+        MonotonicInstant(offset: offset + .seconds(seconds))
+    }
+
+    func seconds(since earlier: MonotonicInstant) -> TimeInterval {
+        let value = offset - earlier.offset
+        let parts = value.components
+        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+    }
+}
+
+protocol WallClock: Sendable {
+    func now() -> Date
+}
+
+protocol ContinuousTimeSource: Sendable {
+    func now() -> MonotonicInstant
+    func sleep(for seconds: TimeInterval) async throws
+}
+
+protocol SuspendingTimeSource: Sendable {
+    func now() -> MonotonicInstant
+    func sleep(for seconds: TimeInterval) async throws
+}
+
+struct SystemWallClock: WallClock {
+    func now() -> Date { Date() }
+}
+
+struct SystemContinuousTimeSource: ContinuousTimeSource {
+    private let clock = ContinuousClock()
+    private let origin: ContinuousClock.Instant
+
+    init() {
+        origin = clock.now
+    }
+
+    func now() -> MonotonicInstant {
+        MonotonicInstant(offset: origin.duration(to: clock.now))
+    }
+
+    func sleep(for seconds: TimeInterval) async throws {
+        try await clock.sleep(for: .seconds(seconds))
+    }
+}
+
+struct SystemSuspendingTimeSource: SuspendingTimeSource {
+    private let clock = SuspendingClock()
+    private let origin: SuspendingClock.Instant
+
+    init() {
+        origin = clock.now
+    }
+
+    func now() -> MonotonicInstant {
+        MonotonicInstant(offset: origin.duration(to: clock.now))
+    }
+
+    func sleep(for seconds: TimeInterval) async throws {
+        try await clock.sleep(for: .seconds(seconds))
+    }
+}
+
+enum QuoteChange: Equatable, Sendable {
+    case percent(Decimal)
+    case unavailable
+}
+
+struct BinanceTick: Equatable, Sendable {
+    let productID: String
+    let price: Decimal
+    let changePercent: Decimal
+    let eventDate: Date
+    let receivedInstant: MonotonicInstant
+}
+
+struct Quote: Equatable, Sendable {
+    let itemID: UUID
+    let price: Decimal
+    let change: QuoteChange
+    let source: Venue
+    let eventDate: Date
+    let receivedInstant: MonotonicInstant
+}
+
+struct CandlePoint: Equatable, Sendable {
+    let bucketStart: Date
+    let close: Decimal
+}
+
+struct ChartSeries: Equatable, Sendable {
+    let source: Venue
+    let quoteAsset: String
+    let requestedStart: Date
+    let requestedEnd: Date
+    let points: [CandlePoint]
+    let receivedInstant: MonotonicInstant
+    var latestRefreshFailed: Bool
+}
+
+struct NetworkFailure: Error, Equatable, Sendable, CustomStringConvertible {
+    let domain: String
+    let code: Int
+    let message: String
+
+    var description: String { message }
+
+    static func wrapping(_ error: any Error, domain: String = "network") -> NetworkFailure {
+        if let known = error as? NetworkFailure { return known }
+        let nsError = error as NSError
+        return NetworkFailure(domain: domain, code: nsError.code, message: nsError.localizedDescription)
+    }
+}
+
+enum BinanceLifecycle: Equatable, Sendable {
+    case stopped
+    case connecting
+    case connected
+    case backingOff(attempt: Int, delay: TimeInterval)
+    case suspended
+}
+
+enum ConnectionPresentation: String, Sendable {
+    case live
+    case stale
+    case offline
+}
+
+struct FallbackRequestToken: Equatable, Sendable {
+    let requestID: UUID
+    let itemID: UUID
+    let productID: String
+    let marketRevision: UInt64
+    let startedAt: MonotonicInstant
+}
+
+struct ChartRequestToken: Equatable, Sendable {
+    let requestID: UUID
+    let itemID: UUID
+    let venue: Venue
+    let productID: String
+    let marketRevision: UInt64
+    let requestedStart: Date
+    let requestedEnd: Date
+}
+
+struct SearchResult: Equatable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let symbol: String
+    let marketCapRank: Int?
+    let thumbnailURL: URL?
+}
+
+struct VenueCandidate: Equatable, Identifiable, Sendable {
+    var id: String { "\(venue.rawValue):\(productID)" }
+    let venue: Venue
+    let productID: String
+    let baseAsset: String
+    let quoteAsset: String
+}
+
+struct CoinbaseQuoteValue: Equatable, Sendable {
+    let price: Decimal
+    let change: QuoteChange
+}
+
+struct HTTPResponseData: Sendable {
+    let statusCode: Int
+    let body: Data
+    let headers: [String: String]
+}
+
+protocol HTTPTransport: Sendable {
+    func response(for request: URLRequest) async throws -> HTTPResponseData
+}
+
+enum RESTRequestPriority: Int, Sendable, Comparable {
+    case productCatalog = 0
+    case quote = 1
+    case candle = 2
+    case search = 3
+
+    static func < (lhs: RESTRequestPriority, rhs: RESTRequestPriority) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
+protocol RequestPacer: Sendable {
+    func acquire(priority: RESTRequestPriority, cost: Int) async throws
+    func applyRateLimitBackoff(seconds: TimeInterval) async
+}
+
+@MainActor
+protocol BinanceFeedSink: AnyObject {
+    func feedDidAccept(_ tick: BinanceTick)
+    func feedStateDidChange(_ state: BinanceLifecycle)
+}
+
+enum WebSocketInboundMessage: Sendable {
+    case string(String)
+    case data(Data)
+}
+
+@MainActor
+protocol WebSocketTaskTransport: AnyObject {
+    var taskIdentifier: Int { get }
+    var maximumMessageSize: Int { get set }
+    func resume()
+    func receive() async throws -> WebSocketInboundMessage
+    func cancel()
+}
+
+@MainActor
+protocol WebSocketSessionTransport: AnyObject {
+    func makeTask(url: URL) -> any WebSocketTaskTransport
+    func invalidate()
+}
+
+@MainActor
+protocol WebSocketDelegateReceiving: AnyObject {}
+
+@MainActor
+protocol WebSocketSessionFactory: AnyObject {
+    func makeLifetimeSession(delegate: any WebSocketDelegateReceiving) -> any WebSocketSessionTransport
+}
+
+@MainActor
+protocol NotificationSubmitting: AnyObject {
+    func requestAuthorization() async -> Result<Bool, NetworkFailure>
+    func submit(itemID: UUID, symbol: String, price: Decimal, firedAt: Date) async -> Result<Void, NetworkFailure>
+}
+
+enum AlertDecision: Equatable, Sendable {
+    case noChange(itemID: UUID)
+    case rearm(itemID: UUID, expectedAlert: PriceAlert)
+    case fire(itemID: UUID, expectedAlert: PriceAlert, firedAt: Date)
+}
+
+enum PersistenceMode: Equatable, Sendable {
+    case writable
+    case readOnly(reason: String)
+    case recovery(reason: String, originalBytes: Data)
+}
+
+enum PersistenceLoadResult: Sendable {
+    case firstLaunch(PersistedState)
+    case loaded(PersistedState)
+    case migrated(PersistedState)
+    case recovery(seed: PersistedState, reason: String, originalBytes: Data)
+}
+
+enum ValidationFailure: Error, Equatable, Sendable, CustomStringConvertible {
+    case invalid(String)
+
+    var description: String {
+        switch self {
+        case .invalid(let message): message
+        }
+    }
+}
+
+func decimalIsFinite(_ value: Decimal) -> Bool {
+    !value.isNaN
+}
+
+func positiveDecimal(from string: String) -> Decimal? {
+    guard let value = Decimal(string: string, locale: Locale(identifier: "en_US_POSIX")),
+          decimalIsFinite(value), value > 0 else { return nil }
+    return value
+}
+
+func finiteDecimal(from string: String) -> Decimal? {
+    guard let value = Decimal(string: string, locale: Locale(identifier: "en_US_POSIX")),
+          decimalIsFinite(value) else { return nil }
+    return value
+}
+
+func decimalString(_ value: Decimal) -> String {
+    NSDecimalNumber(decimal: value).stringValue
+}
+
+func binanceCombinedStreamURL(productIDs: Set<String>) -> URL? {
+    guard !productIDs.isEmpty else { return nil }
+    let streams = productIDs.map { $0.lowercased() + "@ticker" }.sorted().joined(separator: "/")
+    var components = URLComponents()
+    components.scheme = "wss"
+    components.host = "stream.binance.com"
+    components.port = 9443
+    components.path = "/stream"
+    components.queryItems = [URLQueryItem(name: "streams", value: streams)]
+    return components.url
+}
+
+func validatePersistedState(_ state: PersistedState) throws {
+    guard state.schemaVersion == currentSchemaVersion else {
+        throw ValidationFailure.invalid("Unsupported schema version \(state.schemaVersion)")
+    }
+    guard state.items.count <= maximumWatchlistCount else {
+        throw ValidationFailure.invalid("The watchlist exceeds \(maximumWatchlistCount) items")
+    }
+    guard Set(state.items.map(\.id)).count == state.items.count else {
+        throw ValidationFailure.invalid("Duplicate item UUID")
+    }
+    guard Set(state.items.map(\.coinGeckoID)).count == state.items.count else {
+        throw ValidationFailure.invalid("Duplicate CoinGecko ID")
+    }
+    let binanceIDs = state.items.compactMap(\.binanceMapping?.productID)
+    let coinbaseIDs = state.items.compactMap(\.coinbaseMapping?.productID)
+    guard Set(binanceIDs).count == binanceIDs.count else {
+        throw ValidationFailure.invalid("Duplicate Binance product ID")
+    }
+    guard Set(coinbaseIDs).count == coinbaseIDs.count else {
+        throw ValidationFailure.invalid("Duplicate Coinbase product ID")
+    }
+    if state.items.isEmpty {
+        guard state.primaryItemID == nil else { throw ValidationFailure.invalid("Empty watchlist has a primary item") }
+    } else {
+        guard let primary = state.primaryItemID, state.items.contains(where: { $0.id == primary }) else {
+            throw ValidationFailure.invalid("Primary item is missing or dangling")
+        }
+    }
+    for item in state.items {
+        guard !item.coinGeckoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !item.symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ValidationFailure.invalid("Item identity fields must not be empty")
+        }
+        guard item.binanceMapping != nil || item.coinbaseMapping != nil else {
+            throw ValidationFailure.invalid("Every item needs a venue mapping")
+        }
+        try validateMapping(item.binanceMapping, expectedVenue: .binance)
+        try validateMapping(item.coinbaseMapping, expectedVenue: .coinbase)
+        if let alert = item.alert { try validateAlert(alert) }
+    }
+    if let url = binanceCombinedStreamURL(productIDs: Set(binanceIDs)),
+       url.absoluteString.utf8.count > maximumCombinedStreamURLBytes {
+        throw ValidationFailure.invalid("The Binance combined-stream URL exceeds \(maximumCombinedStreamURLBytes) bytes")
+    }
+}
+
+private func validateMapping(_ mapping: VenueMapping?, expectedVenue: Venue) throws {
+    guard let mapping else { return }
+    guard mapping.exchange == expectedVenue else {
+        throw ValidationFailure.invalid("Mapping exchange does not match its venue property")
+    }
+    guard !mapping.productID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          !mapping.baseAsset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          !mapping.quoteAsset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw ValidationFailure.invalid("Mapping fields must not be empty")
+    }
+}
+
+func validateAlert(_ alert: PriceAlert) throws {
+    guard decimalIsFinite(alert.threshold), alert.threshold > 0 else {
+        throw ValidationFailure.invalid("Alert threshold must be positive")
+    }
+    guard (0...604_800).contains(alert.cooldownSeconds) else {
+        throw ValidationFailure.invalid("Alert cooldown is out of range")
+    }
+    guard decimalIsFinite(alert.hysteresisPercent), alert.hysteresisPercent >= 0,
+          alert.hysteresisPercent < 100 else {
+        throw ValidationFailure.invalid("Alert hysteresis is out of range")
+    }
+}

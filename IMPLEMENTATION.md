@@ -101,6 +101,13 @@ Fields consumed from each combined-stream message are:
 
 `s` is the persisted product ID, `c` is price, `P` is 24-hour change percent, and `E` is venue event time in milliseconds. Reject unknown product IDs, invalid decimal strings, null values, and non-finite percentages. Map product ID back to an item only through persisted mappings.
 
+A venue product ID maps to **at most one** watch item. The add flow rejects confirming a venue
+product ID already mapped by another item, for the same reason duplicate CoinGecko IDs are rejected:
+two rows quoting one market are the same row displayed twice. Enforcing uniqueness at entry keeps
+tick delivery a lookup rather than a fan-out, and keeps the per-product staleness key of §4.1.1
+unambiguous. A decoded file violating this enters read-only recovery (§4.2) rather than being
+silently fanned out.
+
 Candidate discovery uses:
 
 ```text
@@ -112,23 +119,25 @@ whose `quoteAsset` is `USDT`, and whose `status` is `TRADING`.
 Ticker equality makes a candidate, not an identity assertion.
 
 The socket client uses capped exponential retry delays of 1, 2, 4, 8, 16, then 30 seconds.
-`reconnect()` is idempotent: repeated calls cancel at most one current task and create at most one replacement.
+Connection replacement is idempotent: each supersede cancels at most one current task and creates at
+most one replacement (§4.3.3).
 
 The attempt counter that indexes that delay sequence **persists across connect and close cycles**.
-It resets to zero only after the current session has accepted one valid ticker update — never on
-socket open, and never on a health-triggered reconnect. Resetting on connection would let a server
-that accepts and immediately closes the socket produce continuous one-second reconnect churn that
-never reaches the 30-second cap, contradicting §7's claim that attempts continue every 30 seconds.
+It resets to zero only after the current session has accepted a valid ticker update **for every
+product it subscribed to** — never on socket open, and never on a health-triggered reconnect.
+Resetting on connection would let a server that accepts and immediately closes the socket produce
+continuous one-second reconnect churn that never reaches the 30-second cap, contradicting §7's claim
+that attempts continue every 30 seconds. Requiring the full product set is what stops one live
+product in a combined stream from resetting the counter on behalf of a permanently silent neighbor;
+§4.3.5 gives the full rule.
 
 Each connection carries a **client-local epoch**: a UUID minted when the connection task starts.
-The epoch is stamped on every `FeedEvent` the client yields, including failures, and travels to
-`AppModel`, which discards any event whose epoch is not the currently active one. Actor-side
-checks alone are insufficient: events already buffered inside the `AsyncStream` were produced
-before any replacement existed, so a failure from a superseded connection would otherwise be
-applied to its replacement and mark a healthy session failed.
+It is connection identity **internal to the actor**. It is not stamped on events, not returned to
+callers, and not compared by `AppModel`. Superseded connections are excluded by the actor-side
+identity check plus the ordered `.superseded` barrier described in §4.3.3.
 
-This epoch is per-client connection identity. It is not an application-wide generation number,
-and no other component mints or propagates one.
+No component outside `BinanceStreamClient` mints, reads, or propagates an epoch, and there is no
+application-wide generation number.
 
 ### 2.2.1 Liveness and half-open detection
 
@@ -390,14 +399,13 @@ struct TickerUpdate: Sendable {
     let receivedInstant: ContinuousClock.Instant
 }
 
-struct FeedEvent: Sendable {
-    enum Kind: Sendable {
-        case ticker(TickerUpdate)
-        case connected
-        case failed(NetworkFailure)
-    }
-    let epoch: UUID
-    let kind: Kind
+enum FeedEvent: Sendable {
+    case ticker(TickerUpdate)
+    case connected
+    case failed(NetworkFailure)
+    /// Ordered in-band barrier. Everything read before it belongs to a superseded
+    /// connection; everything after it belongs to the replacement. See §4.3.3.
+    case superseded
 }
 
 struct NetworkFailure: Error, Sendable {
@@ -407,11 +415,17 @@ struct NetworkFailure: Error, Sendable {
 }
 ```
 
-Every `FeedEvent` carries `epoch`, including `.failed`. A struct with a nested `Kind` is used
-rather than a bare enum precisely so no case can omit it. `AppModel` compares `epoch` against the
-active Binance epoch and discards non-matching events before any state mutation. It learns that
-active epoch from the value `reconnect()` returns (§4.3), never by adopting the epoch of an event it
-just received.
+`FeedEvent` carries **no** epoch. Connection identity stays inside `BinanceStreamClient` and is
+never handed across an actor boundary; `AppModel` holds no epoch variable and performs no epoch
+comparison. Staleness is decided by stream position relative to the `.superseded` barrier, which the
+client emits when it replaces a connection for any reason — external set change, health repair, or
+its own autonomous retry. §4.3.1 records why the previous per-event epoch stamp was removed: it made
+recovery from autonomous retry unreachable, and its handoff was not atomic against MainActor
+suspension.
+
+`AppModel` must not commit a quote-affecting event to published state and then rely on a later check
+to undo it. It buffers events consumed since the last barrier, and on `.superseded` discards the
+uncommitted ones.
 
 Runtime dictionaries are keyed by watch-item UUID, not symbol.
 Runtime source choice, epochs, and monotonic timestamps are not persisted.
@@ -424,12 +438,28 @@ Runtime source choice, epochs, and monotonic timestamps are not persisted.
 It owns items, primary ID, quotes, sparklines, visible errors, and cancellable loop tasks.
 SwiftUI views read it directly and invoke its main-actor methods.
 
-On launch it loads `PersistedState`, starts feeds for nonempty mappings,
-performs one sparkline refresh, then starts periodic loops.
-On watchlist changes it saves state, and calls the idempotent Binance reconnect only when the
-Binance product-ID set changed (§2.2), installing the epoch that call returns before reading further
-events.
-On empty watchlist it cancels all feed and periodic tasks.
+On launch it loads `PersistedState`, obtains the single `events()` stream and starts consuming it,
+calls `setProducts` once with the mapped Binance set, performs one sparkline refresh, then starts
+periodic loops.
+
+After **every** watchlist change it saves state and calls `setProducts` with the newly derived
+Binance product-ID set. `setProducts` is idempotent (§4.3.2), so `AppModel` does not compare sets
+itself: reordering rows, changing the primary, editing an alert, and adding or removing a
+Coinbase-only item all derive an unchanged set and are absorbed by the client without touching the
+socket. Suppression of needless reconnects is a property of one contract, not a caller-side
+precondition that each call site must remember to re-check — the caller-side version of this rule
+is what shipped a reconnect on the previous URL.
+
+An empty Binance set is passed to `setProducts` like any other and tears the socket down; it is a
+valid steady state, not a special case. The periodic sparkline, fallback, and stale-check loops keep
+running **whenever the watchlist is nonempty**, gated on the watchlist rather than on the Binance
+set, because a list of Coinbase-only items has an empty Binance set and still needs polling (§2.3).
+Only a genuinely empty watchlist cancels the periodic loops, and adding the first item restarts them
+through the same launch path — an empty list is a state the app returns from, not one it gets stuck
+in.
+
+`AppModel` holds no epoch. On `.superseded` it drops the uncommitted events it consumed since the
+previous barrier (§4.3.3) and continues reading the same stream.
 
 ### 4.1.1 Staleness drives reconnect
 
@@ -451,23 +481,31 @@ ordinary reconnect.
 Session age is therefore the age of the **oldest** subscribed product, and the session is unhealthy
 when any subscribed product exceeds the threshold.
 
-On each 15-second stale check, for the current Binance epoch:
+On each 15-second stale check:
 
-1. if the session is already reconnecting or sleeping in backoff, do nothing;
+1. if no session is currently connected — it is connecting, or sleeping in backoff — do nothing;
 2. if no subscribed product has exceeded 60 seconds, do nothing;
-3. otherwise mark the affected products' quotes stale, call `reconnect()` once, and record that this
-   epoch has been health-reconnected.
+3. otherwise mark the affected products' quotes stale, call `reconnectForHealth()` once, and record
+   that the current connection has been health-repaired.
+
+Condition 1 is evaluated from the `.connected`/`.failed`/`.superseded` events `AppModel` has already
+read, not by querying the client — `AppModel` asks for repair and observes the result; it does not
+inspect the client's internal state.
 
 Reconnect is whole-session because the transport is one combined URL; a single silent product cannot
 be resubscribed on its own. If reconnection does not revive it — a delisted symbol, for example —
 the product stays stale, §2.3 keeps it on Coinbase when it is mapped, and the retry backoff prevents
 the repair attempt from becoming a loop.
 
-An epoch is health-reconnected at most once. The successor connection is a new epoch with its own
-`connectedInstant`, so a genuinely dead endpoint produces one reconnect per attempt governed by the
-retry backoff of §2.2 — not one per stale check. Combined with the backoff-reset rule, a server that
-accepts and immediately drops the connection walks the delay sequence to its 30-second cap instead
-of churning.
+A connection is health-repaired at most once: the flag is cleared when the next `.connected` arrives,
+so each replacement earns one repair rather than one per stale check. The successor is a new
+connection with its own `connectedInstant`.
+
+The backoff that bounds this loop only works at the granularity of §4.3.5. A permanently silent
+product does not reset the attempt counter, because reset requires a valid tick from **every**
+subscribed product — so repeated repairs of the same silent stream walk 1/2/4/8/16/30 and settle at
+the cap. Under the earlier session-wide reset rule a healthy neighbor cleared the counter each time
+and this repair path was an unbounded 60-to-75-second interruption loop, not a backoff.
 At startup it exits if `NSRunningApplication.runningApplications(withBundleIdentifier:)` finds another BitPrice instance.
 
 Source presentation is intentionally small: `live`, `stale`, or `offline`.
@@ -533,34 +571,113 @@ There is no separate alert history and therefore no history/state split-brain.
 
 ### 4.3 BinanceStreamClient
 
-`actor BinanceStreamClient` exclusively owns the web socket and receive task.
-The actor owns the typed `AsyncStream<FeedEvent>.Continuation`.
-Stream termination cancels the socket task.
+`actor BinanceStreamClient` exclusively owns the web socket, the receive task, the retry attempt
+counter, and the typed `AsyncStream<FeedEvent>.Continuation`.
 
-Its interface returns the epoch to the caller rather than only embedding it in events:
+#### 4.3.1 Why the previous epoch-handshake interface was replaced
+
+Four consecutive revisions patched a three-method interface — `events(for:)`, `reconnect()`,
+`currentEpoch()` — and each patch produced the next revision's blocking defect. The interface is
+therefore replaced outright rather than amended a fifth time. The specific failures it produced,
+recorded so a future revision does not reintroduce the shape:
+
+1. `events(for:)` accepted a product set but returned no epoch; `reconnect()` returned an epoch but
+   accepted no product set. Startup and set-change each had exactly half of what they needed, so a
+   watchlist edit rebuilt the **previous** URL.
+2. The client owns its own retry, so it mints successor epochs autonomously. The only channel to
+   `AppModel` was `reconnect()`'s return value, which autonomous retry does not call — and the rule
+   forbidding adoption of an epoch mid-stream closed the sole alternative. Every event after any
+   spontaneous socket failure was rejected forever: Binance recovery was permanently wedged.
+3. Even along the paths that did work, epoch handoff was not atomic. `AppModel` had to `await` a call
+   into another actor, and the MainActor ran the stream consumer during that suspension — buffered
+   events from the old epoch passed the filter before the new epoch was installed.
+
+The common root is not any one of these. It is that **`AppModel` held the authorization state**, and
+had to acquire it out-of-band from a component that changes it independently. No return value can
+close that gap, because the component does not always return.
+
+#### 4.3.2 The lifecycle contract
+
+Authorization moves inside the actor. The client emits events from exactly one live connection at a
+time and never emits an event from a superseded one. `AppModel` performs **no epoch filtering** and
+holds no epoch variable. `AsyncStream` buffering — the window every previous revision failed to
+close — is closed by construction below, not by a consumer-side check.
 
 ```swift
-func events(for productIDs: Set<String>) -> AsyncStream<FeedEvent>
-@discardableResult func reconnect() -> UUID   // the epoch now current
-func currentEpoch() -> UUID
-func stop()
+actor BinanceStreamClient {
+    /// The single entry point for start, product-set replacement, and stop.
+    /// Empty `productIDs` tears the connection down and is a valid steady state.
+    /// Idempotent: calling with the current set is a no-op that leaves the socket untouched.
+    func setProducts(_ productIDs: Set<String>)
+
+    /// Exactly one stream for the client's whole lifetime, obtained once at startup
+    /// before any `setProducts` call. It never terminates on reconnect, and is not
+    /// re-obtained on product change.
+    func events() -> AsyncStream<FeedEvent>
+
+    /// Health-triggered repair of the current connection, per §4.1.1.
+    /// Idempotent and set-preserving: it reconnects the products already configured.
+    /// Returns nothing. Nothing outside the actor needs to know the epoch.
+    func reconnectForHealth()
+}
 ```
 
-`reconnect()` returning the new epoch is what makes the filter work at all. If `AppModel` could only
-learn an epoch by observing an event, the check would be circular: a buffered event from the
-superseded connection can be the very next thing it reads, and adopting that event's epoch as
-"current" would authorize exactly the event the mechanism exists to reject. So `AppModel` installs
-the epoch it received from `reconnect()` **before** consuming any further events, and treats
-everything not matching it as stale. `currentEpoch()` exists for reconciliation after a resume and
-must never be used to adopt an epoch mid-stream.
+Three methods become three **distinct intents** — replace the set, observe, repair — rather than
+three partial views of one lifecycle. There is no `currentEpoch()`, no epoch return value, and no
+`stop()`: stopping is `setProducts([])`.
 
-Only the current epoch's connection task may yield events, and every event it yields is stamped
-with that epoch. The actor-side check stops a replaced task from yielding at all; the stamp is what
-lets `AppModel` reject events that were already yielded and are sitting in the stream buffer. Both
-are required — neither alone closes the window.
+#### 4.3.3 Sequencing rules that make buffered events unreachable
 
-The actor also owns the retry attempt counter described in §2.2, resetting it only on a valid
-ticker update.
+The epoch still exists inside the actor, as connection identity. It is no longer a token handed
+across an actor boundary.
+
+1. Each connection task holds the epoch it was created with as a local constant.
+2. A connection task yields to the continuation **only** after re-checking, inside the actor, that
+   its own epoch still equals the actor's current epoch. A superseded task's yield is dropped at the
+   source.
+3. Superseding a connection — from `setProducts`, `reconnectForHealth`, or the client's own retry —
+   is one synchronous actor-isolated step: mint the new epoch, cancel the old task, and **drain**.
+
+Rule 3's drain is what removes consumer-side filtering. Because the actor owns the continuation and
+a replaced task can no longer yield, the only stale events that can exist are those already sitting
+in the stream buffer. The supersede step yields a `.superseded` barrier after cancelling.
+`AppModel` treats it as a barrier: on receipt it discards every quote-affecting event it had
+consumed since the previous barrier and had not yet committed, then resumes. The barrier is
+delivered **in-band, in order**, on the same stream — so it cannot be raced by an `await` on another
+actor, which is exactly how the previous design's handoff failed.
+
+Equivalently: staleness is decided by **position in a single ordered stream**, not by comparing a
+consumer-held identifier against an event-carried one. Ordering is a property `AsyncStream` already
+guarantees; identifier agreement across two actors is not.
+
+`FeedEvent` therefore drops its `epoch` field (§3). Events are unconditionally current when read,
+because the barrier has already invalidated everything before it.
+
+#### 4.3.4 Autonomous retry
+
+The client retries on its own, using the capped 1/2/4/8/16/30-second `SuspendingClock` delays of
+§2.2. Autonomous retry supersedes exactly like an external call: it mints an epoch, emits the
+barrier, and connects. Because no epoch crosses the boundary, autonomous retry needs no channel to
+`AppModel` and cannot wedge recovery. This is defect 2 above, removed structurally rather than
+patched.
+
+`.connected` and `.failed` remain on the stream so `AppModel` can render `live`/`stale`/`offline`,
+but they are status reports, not authorization.
+
+#### 4.3.5 Retry counter granularity
+
+§2.2's counter resets only after the current session accepts a valid ticker update. In a combined
+stream that rule is wrong at the granularity it is stated: any one live product resets the counter
+on behalf of a permanently silent neighbor, so a health reconnect restarts the sequence at one
+second forever and never reaches the 30-second cap.
+
+The counter therefore resets only when a session accepts a valid tick **for every product it
+subscribed to**. A session where one product never speaks does not reset it, so repeated
+health-triggered repairs of the same silent product walk 1/2/4/8/16/30 and settle at the cap.
+
+A session that accepted at least one tick but not a full set still counts as reachable, so
+`.offline` is not entered — the circuit-breaker condition of §2.2 stays tied to sessions that
+produced no valid tick at all.
 Backoff sleeping uses `SuspendingClock`; health and last-success ages use `ContinuousClock`.
 
 ### 4.4 REST clients
@@ -825,12 +942,15 @@ No test depends on live public APIs except the separately marked smoke test.
 The following cover behavior specified above that tests 1–23 leave unasserted. They are core
 contracts, not rare protocol edges.
 
-24. **Stale drives reconnect:** the threshold is strict — at exactly 60 seconds no reconnect occurs, and the first stale check past 60 seconds produces exactly one `reconnect()` for that epoch. Awake detection therefore lands above 60 and below 75 seconds. A session already backing off is not restarted; a socket that connects and never ticks still ages from `connectedInstant`.
-25. **Stale epoch rejection:** a `.failed` event yielded by a superseded connection and delivered from the `AsyncStream` buffer after its replacement is `connected` does not mark the replacement failed; the same holds for a late `.ticker`. The replacement epoch is taken from `reconnect()`'s return value, and a test in which the buffered old event is read first still rejects it.
+24. **Stale drives reconnect:** the threshold is strict — at exactly 60 seconds no reconnect occurs, and the first stale check past 60 seconds produces exactly one `reconnectForHealth()` for the current connection, with no further repair until the next `.connected`. Awake detection therefore lands above 60 and below 75 seconds. A session already backing off is not restarted; a socket that connects and never ticks still ages from `connectedInstant`.
+25. **Superseded-connection isolation:** a `.failed` and a `.ticker` yielded by a connection that is then superseded, and sitting in the `AsyncStream` buffer when the replacement connects, do not mark the replacement failed and do not update a quote. The barrier ordering is asserted directly: the consumer reads the stale events *before* `.superseded`, and the barrier discards them. No epoch value appears anywhere in the test, because `AppModel` holds none.
 26. **Partial stream silence:** in a two-product combined stream where one product keeps ticking and the other stays silent past 60 seconds, the session is judged unhealthy and reconnects once; only the silent product's quote is marked stale. A session-wide timestamp would refresh on the live product and never fire — that is the regression this test exists to catch. The same strict boundary as test 24 applies: at exactly 60 seconds of silence, nothing happens.
 27. **Absent schemaVersion:** a fixture with no `schemaVersion` key decodes as version `0` and migrates, rather than failing the decode into recovery mode; this is asserted separately from the missing-`isArmed` case, since either alone would fail synthesized decoding for a different reason.
-28. **Backoff reset rule:** the attempt counter survives connect/close cycles and resets only after a valid ticker update; a server that accepts then immediately closes walks 1/2/4/8/16/30 rather than repeating 1.
-29. **Reconnect trigger scope:** reordering rows, changing the primary, and editing an alert leave the socket untouched; only a changed Binance product-ID set rebuilds the URL.
+28. **Backoff reset rule:** the attempt counter survives connect/close cycles and resets only after a valid ticker update **from every subscribed product**; a server that accepts then immediately closes walks 1/2/4/8/16/30 rather than repeating 1. A two-product session in which only one product ever ticks does **not** reset the counter — assert across at least three successive health repairs that the delays increase and reach the cap, since a single-repair test cannot distinguish this from the session-wide rule it replaces.
+29. **Reconnect trigger scope:** reordering rows, changing the primary, editing an alert, and adding or removing a Coinbase-only item each call `setProducts` and each leave the socket untouched, because the derived set is unchanged and `setProducts` is idempotent; only a changed Binance product-ID set rebuilds the URL. Assert idempotence at the client, not suppression at the caller.
+29a. **Autonomous retry recovery:** with no external call of any kind, a socket failure followed by the client's own successful retry delivers `.superseded`, then `.connected`, then a `.ticker` that **updates the quote**. This is the permanent-wedge regression: under the previous design every post-retry event was rejected forever.
+29b. **Empty-set lifecycle:** `setProducts([])` closes the socket and is a steady state; a later nonempty `setProducts` on the same client and the same stream reconnects without re-obtaining `events()`. Deleting the last watch item cancels the periodic loops and adding an item restarts them. A watchlist of only Coinbase-only items keeps the periodic loops running while the Binance set is empty.
+29c. **Duplicate venue product ID:** confirming a venue product ID already mapped by another item is rejected at the add flow; a persisted file containing the duplicate enters read-only recovery rather than fanning one tick out to two rows.
 30. **Coinbase-only item:** an item with Binance “No market” and a confirmed Coinbase product is polled immediately at launch and every 60 seconds thereafter, with no Binance failure required.
 31. **Active quote asset:** a dual-mapped row shows USDT under Binance and USD under Coinbase, updating on failover in both directions; with no quote it falls back to the mapped venue's asset rather than blank.
 32. **Search debounce and cancellation:** keystrokes within 300 ms of running time issue one request; sleep does not complete the debounce; an emptied query cancels the in-flight task and clears results.

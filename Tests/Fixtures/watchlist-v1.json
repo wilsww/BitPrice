@@ -1,0 +1,35 @@
+{
+  "items": [
+    {
+      "alert": {
+        "cooldownSeconds": 60,
+        "direction": "above",
+        "hysteresisPercent": "1.5",
+        "isArmed": false,
+        "isEnabled": true,
+        "lastFiredAt": null,
+        "threshold": "100000.25"
+      },
+      "binanceMapping": {
+        "baseAsset": "BTC",
+        "exchange": "binance",
+        "productID": "BTCUSDT",
+        "provenance": "builtInBTC",
+        "quoteAsset": "USDT"
+      },
+      "coinGeckoID": "bitcoin",
+      "coinbaseMapping": {
+        "baseAsset": "BTC",
+        "exchange": "coinbase",
+        "productID": "BTC-USD",
+        "provenance": "builtInBTC",
+        "quoteAsset": "USD"
+      },
+      "id": "11111111-1111-1111-1111-111111111111",
+      "name": "Bitcoin",
+      "symbol": "BTC"
+    }
+  ],
+  "primaryItemID": "11111111-1111-1111-1111-111111111111",
+  "schemaVersion": 1
+}
