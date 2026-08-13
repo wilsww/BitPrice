@@ -386,8 +386,17 @@ final class AppModel: ObservableObject, BinanceFeedSink {
 
     static func formatChange(_ change: QuoteChange) -> String {
         guard case .percent(let value) = change else { return "—" }
-        let prefix = value > 0 ? "+" : ""
-        return "\(prefix)\(NSDecimalNumber(decimal: value).rounding(accordingToBehavior: nil).stringValue)%"
+        // Two decimals, matching how venues quote 24-hour change. Rounding to a
+        // whole number rendered a real +1.34% as "+1%", and anything under half
+        // a percent as "+0%", which read as a parsing failure.
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        formatter.positivePrefix = "+"
+        let number = NSDecimalNumber(decimal: value)
+        guard let text = formatter.string(from: number) else { return "—" }
+        return "\(text)%"
     }
 
     private func startNetworkWork() {

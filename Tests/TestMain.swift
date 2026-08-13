@@ -530,6 +530,11 @@ struct BitPriceTests {
                 try expect(AppModel.formatPrice(Decimal(string: "1234.5")!) == "1,234.50", "price formatting")
                 try expect(AppModel.formatChange(.unavailable) == "—", "unavailable change fabricated")
                 try expect(AppModel.formatChange(.percent(1)).hasPrefix("+"), "positive direction missing")
+                // Regression: whole-number rounding rendered +1.34% as "+1%" and
+                // any sub-half-percent move as "+0%", which read as a parse bug.
+                try expect(AppModel.formatChange(.percent(Decimal(string: "1.34")!)) == "+1.34%", "change lost decimals")
+                try expect(AppModel.formatChange(.percent(Decimal(string: "0.12")!)) == "+0.12%", "small change collapsed to zero")
+                try expect(AppModel.formatChange(.percent(Decimal(string: "-2.5")!)) == "-2.50%", "negative change formatting")
             },
             AcceptanceTest(name: "23 packaging prohibitions and plist facts") {
                 try expect(!FileManager.default.fileExists(atPath: "Package.swift"), "Package.swift exists")

@@ -1,10 +1,44 @@
+import AppKit
 import SwiftUI
+
+/// Which editor the panel is currently showing.
+///
+/// A `MenuBarExtra(.window)` panel closes as soon as it stops being the key
+/// window, and presenting a `sheet` does exactly that. Editors are therefore
+/// routed inline, replacing the panel's own content, instead of being presented
+/// as separate windows.
+enum PanelRoute: Equatable {
+    case list
+    case add
+    case alert(WatchItem.ID)
+}
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
-    @State private var showingAdd = false
+    @State private var route: PanelRoute = .list
+    @State private var confirmingQuit = false
 
     var body: some View {
+        Group {
+            switch route {
+            case .list:
+                listContent
+            case .add:
+                AddCoinView(model: model) { route = .list }
+            case let .alert(itemID):
+                if let item = model.items.first(where: { $0.id == itemID }) {
+                    AlertEditorView(model: model, item: item) { route = .list }
+                } else {
+                    // The item was removed while its editor was open.
+                    Color.clear.onAppear { route = .list }
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 380, height: 520)
+    }
+
+    private var listContent: some View {
         VStack(spacing: 10) {
             HStack {
                 Text("BitPrice").font(.headline)
@@ -14,8 +48,27 @@ struct ContentView: View {
                         .foregroundStyle(color(for: presentation))
                 }
                 Spacer()
-                Button { showingAdd = true } label: { Image(systemName: "plus") }
+                Button { route = .add } label: { Image(systemName: "plus") }
                     .disabled(model.isReadOnly || model.items.count >= maximumWatchlistCount)
+                // LSUIElement hides the Dock icon and the app menu, so the panel
+                // carries the only quit affordance the user has.
+                // LSUIElement hides the Dock icon and the app menu, so the panel
+                // carries the only quit affordance the user has.
+                //
+                // Deliberately no keyboard shortcut. A shortcut here made the
+                // button eligible for the key event that dismissed the alert
+                // editor, so saving an alert quit the app. Quitting is also
+                // confirmed, because a single stray click ends the process.
+                if confirmingQuit {
+                    Button("Quit") { NSApplication.shared.terminate(nil) }
+                        .foregroundStyle(.red)
+                    Button("Cancel") { confirmingQuit = false }
+                } else {
+                    Button { confirmingQuit = true } label: {
+                        Image(systemName: "power")
+                    }
+                    .help("Quit BitPrice")
+                }
             }
             if let recovery = model.recoveryMessage {
                 BannerView(text: recovery, color: .orange)
@@ -28,7 +81,7 @@ struct ContentView: View {
             } else {
                 List {
                     ForEach(model.items) { item in
-                        WatchRow(model: model, item: item)
+                        WatchRow(model: model, item: item) { route = .alert(item.id) }
                     }
                     .onMove { source, destination in
                         do { try model.moveItems(fromOffsets: source, toOffset: destination) }
@@ -44,9 +97,6 @@ struct ContentView: View {
                 .listStyle(.plain)
             }
         }
-        .padding(12)
-        .frame(width: 380, height: 520)
-        .sheet(isPresented: $showingAdd) { AddCoinView(model: model) }
     }
 
     private func color(for presentation: ConnectionPresentation) -> Color {
@@ -74,7 +124,7 @@ private struct BannerView: View {
 private struct WatchRow: View {
     @ObservedObject var model: AppModel
     let item: WatchItem
-    @State private var showingAlert = false
+    let editAlert: () -> Void
 
     var body: some View {
         let presentation = model.rowPresentation(for: item)
@@ -119,7 +169,7 @@ private struct WatchRow: View {
                 if let id = item.binanceMapping?.productID { Text("BN: \(id)") }
                 if let id = item.coinbaseMapping?.productID { Text("CB: \(id)") }
                 Spacer()
-                Button("Alert") { showingAlert = true }.buttonStyle(.link)
+                Button("Alert", action: editAlert).buttonStyle(.link)
                 Button { move(by: -1) } label: { Image(systemName: "chevron.up") }
                     .buttonStyle(.plain)
                 Button { move(by: 1) } label: { Image(systemName: "chevron.down") }
@@ -128,7 +178,6 @@ private struct WatchRow: View {
             .font(.caption2).foregroundStyle(.secondary)
         }
         .opacity(presentation == .stale ? 0.62 : 1)
-        .sheet(isPresented: $showingAlert) { AlertEditorView(model: model, item: item) }
     }
 
     private func changeColor(_ change: QuoteChange) -> Color {
@@ -181,7 +230,7 @@ private struct Sparkline: View {
 
 private struct AddCoinView: View {
     @ObservedObject var model: AppModel
-    @Environment(\.dismiss) private var dismiss
+    let close: () -> Void
     @State private var searchText = ""
     @State private var project: SearchResult?
     @State private var binanceCandidates: [VenueCandidate] = []
@@ -192,35 +241,35 @@ private struct AddCoinView: View {
     @State private var localError: String?
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading) {
-                if let project {
-                    confirmation(project)
-                } else {
-                    TextField("Search CoinGecko", text: $searchText)
-                        .textFieldStyle(.roundedBorder)
-                        .onChange(of: searchText) { _, value in model.search(query: value) }
-                    List(model.searchResults) { result in
-                        Button {
-                            choose(result)
-                        } label: {
-                            HStack {
-                                Text(result.symbol).font(.headline)
-                                VStack(alignment: .leading) {
-                                    Text(result.name)
-                                    Text(result.id).font(.caption).foregroundStyle(.secondary)
-                                }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(project == nil ? "Add coin" : "Confirm markets").font(.headline)
+                Spacer()
+                Button("Cancel", action: close)
+            }
+            if let project {
+                confirmation(project)
+            } else {
+                TextField("Search CoinGecko", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: searchText) { _, value in model.search(query: value) }
+                List(model.searchResults) { result in
+                    Button {
+                        choose(result)
+                    } label: {
+                        HStack {
+                            Text(result.symbol).font(.headline)
+                            VStack(alignment: .leading) {
+                                Text(result.name)
+                                Text(result.id).font(.caption).foregroundStyle(.secondary)
                             }
                         }
-                        .buttonStyle(.plain)
                     }
+                    .buttonStyle(.plain)
                 }
-                if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
+                .listStyle(.plain)
             }
-            .padding()
-            .frame(width: 430, height: 440)
-            .navigationTitle(project == nil ? "Add coin" : "Confirm markets")
-            .toolbar { Button("Cancel") { dismiss() } }
+            if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
         }
     }
 
@@ -247,15 +296,41 @@ private struct AddCoinView: View {
         }
     }
 
+    /// Inline selection rather than a `Picker`.
+    ///
+    /// A `Picker`'s popup menu takes key status away from the `MenuBarExtra`
+    /// window, which dismisses the whole panel. Every control here must resolve
+    /// inside the panel itself.
     private func candidatePicker(title: String, candidates: [VenueCandidate], selection: Binding<String?>) -> some View {
-        Picker(title, selection: selection) {
-            Text("Choose…").tag(String?.none)
-            Text("No market").tag(String?.some("__none__"))
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption.bold()).foregroundStyle(.secondary)
+            candidateRow(label: "No market", value: "__none__", selection: selection)
             ForEach(candidates) { candidate in
-                Text("\(candidate.productID) (\(candidate.baseAsset)/\(candidate.quoteAsset))")
-                    .tag(String?.some(candidate.productID))
+                candidateRow(
+                    label: "\(candidate.productID) (\(candidate.baseAsset)/\(candidate.quoteAsset))",
+                    value: candidate.productID,
+                    selection: selection
+                )
+            }
+            if candidates.isEmpty {
+                Text("No ticker-matched candidates.").font(.caption2).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func candidateRow(label: String, value: String, selection: Binding<String?>) -> some View {
+        Button {
+            selection.wrappedValue = value
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: selection.wrappedValue == value ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(selection.wrappedValue == value ? Color.accentColor : .secondary)
+                Text(label).font(.caption)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func choose(_ result: SearchResult) {
@@ -284,7 +359,7 @@ private struct AddCoinView: View {
         )
         do {
             try model.addItem(item)
-            dismiss()
+            close()
         } catch {
             localError = error.localizedDescription
         }
@@ -302,7 +377,7 @@ private struct AddCoinView: View {
 private struct AlertEditorView: View {
     @ObservedObject var model: AppModel
     let item: WatchItem
-    @Environment(\.dismiss) private var dismiss
+    let close: () -> Void
     @State private var enabled: Bool
     @State private var direction: AlertDirection
     @State private var threshold: String
@@ -310,9 +385,10 @@ private struct AlertEditorView: View {
     @State private var hysteresis: String
     @State private var localError: String?
 
-    init(model: AppModel, item: WatchItem) {
+    init(model: AppModel, item: WatchItem, close: @escaping () -> Void) {
         self.model = model
         self.item = item
+        self.close = close
         let alert = item.alert
         _enabled = State(initialValue: alert?.isEnabled ?? false)
         _direction = State(initialValue: alert?.direction ?? .above)
@@ -322,26 +398,72 @@ private struct AlertEditorView: View {
     }
 
     var body: some View {
-        Form {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Alert · \(item.symbol)").font(.headline)
+                Spacer()
+                Button("Cancel", action: close)
+            }
             Toggle("Enabled", isOn: $enabled)
+            // Segmented style renders inline; a menu-style Picker would take key
+            // status from the MenuBarExtra window and dismiss the panel.
             Picker("Direction", selection: $direction) {
                 Text("Above").tag(AlertDirection.above)
                 Text("Below").tag(AlertDirection.below)
             }
-            TextField("Threshold", text: $threshold)
-            TextField("Cooldown seconds", text: $cooldown)
-            TextField("Hysteresis percent", text: $hysteresis)
+            .pickerStyle(.segmented)
+            LabeledContent("Threshold") { TextField("", text: $threshold).textFieldStyle(.roundedBorder) }
+            LabeledContent("Cooldown seconds") { TextField("", text: $cooldown).textFieldStyle(.roundedBorder) }
+            LabeledContent("Hysteresis percent") { TextField("", text: $hysteresis).textFieldStyle(.roundedBorder) }
+            rearmExplanation
+            if let alert = item.alert, alert.isEnabled, !alert.isArmed {
+                Text("Currently disarmed — it already fired and is waiting for the re-arm price above.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             Text("Coinbase polls every 60 seconds and can miss a brief breach.")
                 .font(.caption).foregroundStyle(.secondary)
-            if let localError { Text(localError).foregroundStyle(.red) }
+            if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
+            Spacer()
             HStack {
                 Button("Remove alert") { remove() }
                 Spacer()
+                // No .defaultAction: the editor is replaced by the list view on
+                // save, and the same key event would then reach whatever became
+                // the default control there.
                 Button("Save") { save() }
             }
         }
-        .padding()
-        .frame(width: 380, height: 330)
+    }
+
+    /// Spells out the re-arm price.
+    ///
+    /// Hysteresis is a percentage, so its real effect is invisible until it is
+    /// converted back into a price: 1% on a 63,966 threshold means the alert
+    /// stays silent until the price falls 640. Without this line the alert
+    /// looks broken — it fires once and never again.
+    @ViewBuilder
+    private var rearmExplanation: some View {
+        if let thresholdValue = finiteDecimal(from: threshold),
+           let hysteresisValue = finiteDecimal(from: hysteresis),
+           thresholdValue > 0 {
+            let fraction = hysteresisValue / 100
+            let boundary = direction == .above
+                ? thresholdValue * (1 - fraction)
+                : thresholdValue * (1 + fraction)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(direction == .above
+                     ? "Fires above \(AppModel.formatPrice(thresholdValue))."
+                     : "Fires below \(AppModel.formatPrice(thresholdValue)).")
+                Text(direction == .above
+                     ? "Silent until the price falls below \(AppModel.formatPrice(boundary)), then it can fire again."
+                     : "Silent until the price rises above \(AppModel.formatPrice(boundary)), then it can fire again.")
+                if hysteresisValue == 0 {
+                    Text("Hysteresis 0 re-arms as soon as the price crosses back; cooldown alone limits repeats.")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
     }
 
     private func save() {
@@ -357,12 +479,12 @@ private struct AlertEditorView: View {
             hysteresisPercent: hysteresisValue, isEnabled: enabled,
             isArmed: prior?.isArmed ?? true, lastFiredAt: prior?.lastFiredAt
         )
-        do { try model.saveAlert(itemID: item.id, proposed: alert); dismiss() }
+        do { try model.saveAlert(itemID: item.id, proposed: alert); close() }
         catch { localError = error.localizedDescription }
     }
 
     private func remove() {
-        do { try model.saveAlert(itemID: item.id, proposed: nil); dismiss() }
+        do { try model.saveAlert(itemID: item.id, proposed: nil); close() }
         catch { localError = error.localizedDescription }
     }
 }
