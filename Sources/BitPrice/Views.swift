@@ -11,12 +11,62 @@ enum PanelRoute: Equatable {
     case list
     case add
     case alert(WatchItem.ID)
+    case confirmQuit
+}
+
+/// Presentation-only axis values derived from the chart points themselves.
+///
+/// Keeping this calculation separate from drawing makes the flat and sparse
+/// cases explicit and lets the acceptance tests cover them without a GUI.
+enum ChartAxisCalculator {
+    static func priceTicks(for points: [CandlePoint], desiredCount: Int = 4) -> [Decimal] {
+        guard let minimum = points.map(\.close).min(),
+              let maximum = points.map(\.close).max() else { return [] }
+        guard minimum != maximum else { return [minimum] }
+
+        let tickCount = min(5, max(3, desiredCount))
+        let step = (maximum - minimum) / Decimal(tickCount - 1)
+        return (0..<tickCount).map { index in
+            index == tickCount - 1 ? maximum : minimum + step * Decimal(index)
+        }
+    }
+
+    static func timeTicks(for points: [CandlePoint]) -> [Date] {
+        let dates = points.map(\.bucketStart).sorted()
+        guard let start = dates.first, let end = dates.last else { return [] }
+        guard start != end else { return [start] }
+
+        let midpoint = start.addingTimeInterval(end.timeIntervalSince(start) / 2)
+        let middle = dates.min { left, right in
+            let leftDistance = abs(left.timeIntervalSince(midpoint))
+            let rightDistance = abs(right.timeIntervalSince(midpoint))
+            return leftDistance == rightDistance ? left < right : leftDistance < rightDistance
+        }
+
+        var ticks = [start]
+        if let middle, middle > start, middle < end { ticks.append(middle) }
+        ticks.append(end)
+        return ticks
+    }
+
+    static func priceFraction(_ value: Decimal, minimum: Decimal, maximum: Decimal) -> Double {
+        guard minimum != maximum else { return 0.5 }
+        let numerator = NSDecimalNumber(decimal: value - minimum).doubleValue
+        let denominator = NSDecimalNumber(decimal: maximum - minimum).doubleValue
+        return numerator / denominator
+    }
+
+    static func timeFraction(_ value: Date, start: Date, end: Date) -> Double {
+        let duration = end.timeIntervalSince(start)
+        guard duration != 0 else { return 0.5 }
+        return value.timeIntervalSince(start) / duration
+    }
 }
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @State private var route: PanelRoute = .list
-    @State private var confirmingQuit = false
+    @State private var selectedItemID: WatchItem.ID?
 
     var body: some View {
         Group {
@@ -32,43 +82,37 @@ struct ContentView: View {
                     // The item was removed while its editor was open.
                     Color.clear.onAppear { route = .list }
                 }
+            case .confirmQuit:
+                QuitConfirmationView { route = .list }
             }
         }
-        .padding(12)
-        .frame(width: 380, height: 520)
+        .padding(16)
+        .frame(width: 660, height: 780)
+        .onAppear { reconcileSelection() }
+        .onChange(of: model.items.map(\.id)) { _, _ in reconcileSelection() }
     }
 
     private var listContent: some View {
         VStack(spacing: 10) {
             HStack {
-                Text("BitPrice").font(.headline)
+                // LSUIElement hides the Dock icon and the app menu, so the panel
+                // carries the only quit affordance the user has. Quitting is
+                // routed through a second inline step to prevent stray exits.
+                Button { route = .confirmQuit } label: {
+                    Image(systemName: "power")
+                }
+                .font(.title3)
+                .help("Quit BitPrice")
+                Text("BitPrice").font(.title3.bold())
                 if let presentation = model.aggregatePresentation {
                     Text(presentation.rawValue)
-                        .font(.caption.bold())
+                        .font(.body.bold())
                         .foregroundStyle(color(for: presentation))
                 }
                 Spacer()
                 Button { route = .add } label: { Image(systemName: "plus") }
+                    .font(.title3)
                     .disabled(model.isReadOnly || model.items.count >= maximumWatchlistCount)
-                // LSUIElement hides the Dock icon and the app menu, so the panel
-                // carries the only quit affordance the user has.
-                // LSUIElement hides the Dock icon and the app menu, so the panel
-                // carries the only quit affordance the user has.
-                //
-                // Deliberately no keyboard shortcut. A shortcut here made the
-                // button eligible for the key event that dismissed the alert
-                // editor, so saving an alert quit the app. Quitting is also
-                // confirmed, because a single stray click ends the process.
-                if confirmingQuit {
-                    Button("Quit") { NSApplication.shared.terminate(nil) }
-                        .foregroundStyle(.red)
-                    Button("Cancel") { confirmingQuit = false }
-                } else {
-                    Button { confirmingQuit = true } label: {
-                        Image(systemName: "power")
-                    }
-                    .help("Quit BitPrice")
-                }
             }
             if let recovery = model.recoveryMessage {
                 BannerView(text: recovery, color: .orange)
@@ -77,11 +121,15 @@ struct ContentView: View {
             if let error = model.lastError { BannerView(text: error, color: .red) }
             if model.items.isEmpty {
                 ContentUnavailableView("No watched coins", systemImage: "bitcoinsign.circle", description: Text("Add a market to begin."))
-                    .frame(height: 180)
+                    .frame(maxHeight: .infinity)
+                Divider()
+                EmptyDetailView(hasItems: false)
+                    .frame(height: 350)
             } else {
-                List {
+                List(selection: $selectedItemID) {
                     ForEach(model.items) { item in
                         WatchRow(model: model, item: item) { route = .alert(item.id) }
+                            .tag(item.id)
                     }
                     .onMove { source, destination in
                         do { try model.moveItems(fromOffsets: source, toOffset: destination) }
@@ -95,7 +143,46 @@ struct ContentView: View {
                     }
                 }
                 .listStyle(.plain)
+                .frame(maxHeight: .infinity)
+                Divider()
+                if let selectedItem {
+                    ScrollView {
+                        SelectedCoinDetail(model: model, item: selectedItem) {
+                            removeSelectedItem()
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 350)
+                } else {
+                    EmptyDetailView(hasItems: true)
+                        .frame(height: 350)
+                }
             }
+        }
+    }
+
+    private var selectedItem: WatchItem? {
+        guard let selectedItemID else { return nil }
+        return model.items.first { $0.id == selectedItemID }
+    }
+
+    private func reconcileSelection() {
+        if let selectedItemID, model.items.contains(where: { $0.id == selectedItemID }) { return }
+        if let primaryItemID = model.primaryItemID,
+           model.items.contains(where: { $0.id == primaryItemID }) {
+            selectedItemID = primaryItemID
+        } else {
+            selectedItemID = model.items.first?.id
+        }
+    }
+
+    private func removeSelectedItem() {
+        guard let selectedItemID else { return }
+        do {
+            try model.removeItem(id: selectedItemID)
+            reconcileSelection()
+        } catch {
+            // AppModel retains the durable error surface.
         }
     }
 
@@ -108,13 +195,40 @@ struct ContentView: View {
     }
 }
 
+private struct QuitConfirmationView: View {
+    let cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Quit BitPrice?")
+                .font(.title.bold())
+            Text("Price updates and alerts stop while the app is closed.")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 16) {
+                Button("Cancel", action: cancel)
+                    .buttonStyle(.bordered)
+                Button(role: .destructive) {
+                    NSApplication.shared.terminate(nil)
+                } label: {
+                    Text("Quit")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+            }
+            .padding(.top, 8)
+        }
+        .frame(maxWidth: 380, maxHeight: .infinity, alignment: .center)
+    }
+}
+
 private struct BannerView: View {
     let text: String
     let color: Color
 
     var body: some View {
         Text(text)
-            .font(.caption)
+            .font(.body)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(7)
             .background(color.opacity(0.13), in: RoundedRectangle(cornerRadius: 6))
@@ -128,55 +242,64 @@ private struct WatchRow: View {
 
     var body: some View {
         let presentation = model.rowPresentation(for: item)
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
+        let isPrimary = model.primaryItemID == item.id
+        HStack(spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Button {
                     do { try model.setPrimary(item.id) } catch {}
                 } label: {
-                    Image(systemName: model.primaryItemID == item.id ? "star.fill" : "star")
+                    Image(systemName: isPrimary ? "star.fill" : "star")
+                        .font(.title3)
+                        .foregroundStyle(isPrimary ? Color.yellow : Color.secondary.opacity(0.45))
                 }
-                .buttonStyle(.plain)
-                Text(item.symbol).font(.headline)
-                Text(model.quoteAsset(for: item)).font(.caption).foregroundStyle(.secondary)
+                .buttonStyle(.borderless)
+                .help(isPrimary ? "Currently shown in the menu bar" : "Show this coin in the menu bar")
+                Text(item.symbol)
+                    .font(.title.bold())
+                    .lineLimit(1)
+                Text(model.quoteAsset(for: item))
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
                 if presentation != .live {
-                    Text(presentation.rawValue).font(.caption2).foregroundStyle(presentation == .stale ? .orange : .red)
-                }
-                Spacer()
-                if let quote = model.quotes[item.id] {
-                    VStack(alignment: .trailing) {
-                        Text(AppModel.formatPrice(quote.price)).monospacedDigit()
-                        Text(AppModel.formatChange(quote.change))
-                            .font(.caption).monospacedDigit()
-                            .foregroundStyle(changeColor(quote.change))
-                    }
-                } else {
-                    Text("—").foregroundStyle(.secondary)
+                    Text(presentation.rawValue)
+                        .font(.body.bold())
+                        .foregroundStyle(presentation == .stale ? .orange : .red)
                 }
             }
-            if let chart = model.charts[item.id] {
-                Sparkline(series: chart)
-                    .frame(height: 42)
-                HStack {
-                    Text("24h chart · \(chart.source.rawValue.capitalized)/\(chart.quoteAsset)")
-                    if chart.latestRefreshFailed { Text("refresh failed") }
-                }
-                .font(.caption2).foregroundStyle(.secondary)
+            .frame(minWidth: 240, maxWidth: .infinity, alignment: .leading)
+
+            if let quote = model.quotes[item.id] {
+                Text(AppModel.formatPrice(quote.price))
+                    .font(.title2.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(width: 170, alignment: .trailing)
             } else {
-                Text("24h chart unavailable").font(.caption2).foregroundStyle(.secondary)
+                Text("—")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 170, alignment: .trailing)
             }
-            HStack {
-                Text("CG: \(item.coinGeckoID)")
-                if let id = item.binanceMapping?.productID { Text("BN: \(id)") }
-                if let id = item.coinbaseMapping?.productID { Text("CB: \(id)") }
-                Spacer()
-                Button("Alert", action: editAlert).buttonStyle(.link)
-                Button { move(by: -1) } label: { Image(systemName: "chevron.up") }
-                    .buttonStyle(.plain)
-                Button { move(by: 1) } label: { Image(systemName: "chevron.down") }
-                    .buttonStyle(.plain)
+
+            VStack(alignment: .trailing, spacing: 3) {
+                if let quote = model.quotes[item.id] {
+                    Text(AppModel.formatChange(quote.change))
+                        .font(.title3)
+                        .monospacedDigit()
+                        .foregroundStyle(changeColor(quote.change))
+                } else {
+                    Text("—")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+                Button("Alert", action: editAlert)
+                    .buttonStyle(.borderless)
+                    .font(.headline)
             }
-            .font(.caption2).foregroundStyle(.secondary)
+            .frame(width: 105, alignment: .trailing)
         }
+        .padding(.vertical, 5)
         .opacity(presentation == .stale ? 0.62 : 1)
     }
 
@@ -187,12 +310,103 @@ private struct WatchRow: View {
         return .secondary
     }
 
+}
+
+private struct EmptyDetailView: View {
+    let hasItems: Bool
+
+    var body: some View {
+        ContentUnavailableView(
+            hasItems ? "Select a coin" : "No coin details",
+            systemImage: "chart.xyaxis.line",
+            description: Text(hasItems ? "Select a row to inspect its chart and market mappings." : "Add a market to inspect its chart and mappings.")
+        )
+    }
+}
+
+private struct SelectedCoinDetail: View {
+    @ObservedObject var model: AppModel
+    let item: WatchItem
+    let remove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(item.symbol) details")
+                    .font(.title2.bold())
+                Text(model.quoteAsset(for: item))
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button { move(by: -1) } label: { Image(systemName: "chevron.up") }
+                    .buttonStyle(.borderless)
+                    .disabled(itemIndex == 0)
+                    .help("Move up")
+                Button { move(by: 1) } label: { Image(systemName: "chevron.down") }
+                    .buttonStyle(.borderless)
+                    .disabled(itemIndex == nil || itemIndex == model.items.count - 1)
+                    .help("Move down")
+                Button(role: .destructive, action: remove) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .disabled(model.isReadOnly)
+                .help("Remove \(item.symbol)")
+            }
+
+            Label("The starred coin is shown in the menu bar.", systemImage: "star.fill")
+                .font(.body)
+                .foregroundStyle(.secondary)
+
+            if let chart = model.charts[item.id] {
+                Sparkline(series: chart)
+                    .frame(height: 200)
+                Text("24h chart · \(chart.source.rawValue.capitalized)/\(chart.quoteAsset)")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                if chart.latestRefreshFailed {
+                    Text("Refresh failed; showing the last available chart.")
+                        .font(.body)
+                        .foregroundStyle(.orange)
+                }
+            } else {
+                Label("24h chart unavailable", systemImage: "chart.xyaxis.line")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 200)
+            }
+
+            mappingDetails
+        }
+    }
+
+    private var itemIndex: Int? {
+        model.items.firstIndex { $0.id == item.id }
+    }
+
+    private var mappingDetails: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("CG: \(item.coinGeckoID)")
+            if let id = item.binanceMapping?.productID { Text("BN: \(id)") }
+            if let id = item.coinbaseMapping?.productID { Text("CB: \(id)") }
+        }
+        .font(.body)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+    }
+
     private func move(by offset: Int) {
-        guard let index = model.items.firstIndex(where: { $0.id == item.id }) else { return }
+        guard let index = itemIndex else { return }
         let destination = index + offset
         guard model.items.indices.contains(destination) else { return }
-        do { try model.moveItems(fromOffsets: IndexSet(integer: index), toOffset: offset > 0 ? destination + 1 : destination) }
-        catch {}
+        do {
+            try model.moveItems(
+                fromOffsets: IndexSet(integer: index),
+                toOffset: offset > 0 ? destination + 1 : destination
+            )
+        } catch {
+            // AppModel retains the durable error surface.
+        }
     }
 }
 
@@ -200,31 +414,131 @@ private struct Sparkline: View {
     let series: ChartSeries
 
     var body: some View {
-        GeometryReader { geometry in
-            Canvas { context, size in
-                guard series.points.count >= 2 else { return }
-                let values = series.points.map { NSDecimalNumber(decimal: $0.close).doubleValue }
-                guard let minimum = values.min(), let maximum = values.max() else { return }
-                let span = maximum - minimum
-                var path = Path()
-                var previousDate: Date?
-                for (index, point) in series.points.enumerated() {
-                    let xFraction = point.bucketStart.timeIntervalSince(series.requestedStart) /
-                        series.requestedEnd.timeIntervalSince(series.requestedStart)
-                    let value = values[index]
-                    let yFraction = span == 0 ? 0.5 : (value - minimum) / span
-                    let position = CGPoint(x: size.width * xFraction, y: size.height * (1 - yFraction))
-                    if let previousDate, point.bucketStart.timeIntervalSince(previousDate) <= 5_400 {
-                        path.addLine(to: position)
-                    } else {
-                        path.move(to: position)
-                    }
-                    previousDate = point.bucketStart
-                }
-                context.stroke(path, with: .color(.accentColor), lineWidth: 1.5)
-            }
-            .opacity(series.latestRefreshFailed ? 0.45 : 1)
+        Canvas { context, size in
+            let priceTicks = ChartAxisCalculator.priceTicks(for: series.points)
+            let timeTicks = ChartAxisCalculator.timeTicks(for: series.points)
+            guard let minimumPrice = priceTicks.first,
+                  let maximumPrice = priceTicks.last,
+                  let start = timeTicks.first,
+                  let end = timeTicks.last else { return }
+
+            let yAxisWidth: CGFloat = 108
+            let plotRect = CGRect(
+                x: yAxisWidth,
+                y: 14,
+                width: max(0, size.width - yAxisWidth - 10),
+                height: max(0, size.height - 50)
+            )
+            guard plotRect.width > 0, plotRect.height > 0 else { return }
+
+            drawAxes(
+                context: context,
+                plotRect: plotRect,
+                priceTicks: priceTicks,
+                timeTicks: timeTicks,
+                minimumPrice: minimumPrice,
+                maximumPrice: maximumPrice,
+                start: start,
+                end: end
+            )
+            drawSeries(
+                context: context,
+                plotRect: plotRect,
+                minimumPrice: minimumPrice,
+                maximumPrice: maximumPrice,
+                start: start,
+                end: end
+            )
         }
+        .opacity(series.latestRefreshFailed ? 0.45 : 1)
+    }
+
+    private func drawAxes(
+        context: GraphicsContext,
+        plotRect: CGRect,
+        priceTicks: [Decimal],
+        timeTicks: [Date],
+        minimumPrice: Decimal,
+        maximumPrice: Decimal,
+        start: Date,
+        end: Date
+    ) {
+        for tick in priceTicks {
+            let fraction = ChartAxisCalculator.priceFraction(tick, minimum: minimumPrice, maximum: maximumPrice)
+            let y = plotRect.maxY - plotRect.height * fraction
+            var gridline = Path()
+            gridline.move(to: CGPoint(x: plotRect.minX, y: y))
+            gridline.addLine(to: CGPoint(x: plotRect.maxX, y: y))
+            context.stroke(gridline, with: .color(.secondary.opacity(0.22)), lineWidth: 1)
+
+            let label = context.resolve(
+                Text(AppModel.formatPrice(tick))
+                    .font(.body)
+                    .foregroundColor(.secondary)
+            )
+            context.draw(label, at: CGPoint(x: plotRect.minX - 9, y: y), anchor: .trailing)
+        }
+
+        var xAxis = Path()
+        xAxis.move(to: CGPoint(x: plotRect.minX, y: plotRect.maxY))
+        xAxis.addLine(to: CGPoint(x: plotRect.maxX, y: plotRect.maxY))
+        context.stroke(xAxis, with: .color(.secondary.opacity(0.45)), lineWidth: 1)
+
+        for (index, tick) in timeTicks.enumerated() {
+            let fraction = ChartAxisCalculator.timeFraction(tick, start: start, end: end)
+            let x = plotRect.minX + plotRect.width * fraction
+            var mark = Path()
+            mark.move(to: CGPoint(x: x, y: plotRect.maxY))
+            mark.addLine(to: CGPoint(x: x, y: plotRect.maxY + 5))
+            context.stroke(mark, with: .color(.secondary.opacity(0.45)), lineWidth: 1)
+
+            let label = context.resolve(
+                Text(tick.formatted(date: .omitted, time: .shortened))
+                    .font(.body)
+                    .foregroundColor(.secondary)
+            )
+            let anchor: UnitPoint
+            if index == 0 {
+                anchor = .topLeading
+            } else if index == timeTicks.count - 1 {
+                anchor = .topTrailing
+            } else {
+                anchor = .top
+            }
+            context.draw(label, at: CGPoint(x: x, y: plotRect.maxY + 8), anchor: anchor)
+        }
+    }
+
+    private func drawSeries(
+        context: GraphicsContext,
+        plotRect: CGRect,
+        minimumPrice: Decimal,
+        maximumPrice: Decimal,
+        start: Date,
+        end: Date
+    ) {
+        guard series.points.count >= 2 else { return }
+        var path = Path()
+        var previousDate: Date?
+        for point in series.points {
+            let xFraction = ChartAxisCalculator.timeFraction(point.bucketStart, start: start, end: end)
+            let yFraction = ChartAxisCalculator.priceFraction(
+                point.close,
+                minimum: minimumPrice,
+                maximum: maximumPrice
+            )
+            let position = CGPoint(
+                x: plotRect.minX + plotRect.width * xFraction,
+                y: plotRect.maxY - plotRect.height * yFraction
+            )
+            if let previousDate, point.bucketStart.timeIntervalSince(previousDate) <= 5_400 {
+                path.addLine(to: position)
+            } else {
+                path.move(to: position)
+            }
+            previousDate = point.bucketStart
+        }
+        context.stroke(path, with: .color(.accentColor), lineWidth: 2)
     }
 }
 
@@ -243,56 +557,84 @@ private struct AddCoinView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(project == nil ? "Add coin" : "Confirm markets").font(.headline)
+                Text(project == nil ? "Add coin" : "Confirm markets").font(.title2.bold())
                 Spacer()
                 Button("Cancel", action: close)
+                    .font(.headline)
             }
             if let project {
                 confirmation(project)
             } else {
                 TextField("Search CoinGecko", text: $searchText)
+                    .font(.title3)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: searchText) { _, value in model.search(query: value) }
                 List(model.searchResults) { result in
                     Button {
                         choose(result)
                     } label: {
-                        HStack {
-                            Text(result.symbol).font(.headline)
-                            VStack(alignment: .leading) {
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text(result.symbol)
+                                .font(.title2.bold())
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(width: 140, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 3) {
                                 Text(result.name)
-                                Text(result.id).font(.caption).foregroundStyle(.secondary)
+                                    .font(.headline)
+                                Text(result.id)
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .listRowSeparator(.visible)
                 }
                 .listStyle(.plain)
             }
-            if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
+            if let localError { Text(localError).font(.body).foregroundStyle(.red) }
         }
     }
 
     @ViewBuilder
     private func confirmation(_ result: SearchResult) -> some View {
-        Text("Candidates matched by ticker; verify the market.")
-            .font(.callout).foregroundStyle(.orange)
-        Text("\(result.name) (\(result.id))")
-        if loadingCandidates {
-            ProgressView()
-        } else {
-            candidatePicker(title: "Binance / USDT", candidates: binanceCandidates, selection: $selectedBinance)
-            candidatePicker(title: "Coinbase / USD", candidates: coinbaseCandidates, selection: $selectedCoinbase)
-            Text("Coinbase polling is every 60 seconds and can miss a brief alert breach.")
-                .font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            HStack {
-                Button("Back") { project = nil }
-                Spacer()
-                Button("Add") { confirm(result) }
-                    .disabled(selectedBinance == nil || selectedCoinbase == nil ||
-                              selectedBinance == "__none__" && selectedCoinbase == "__none__")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Candidates matched by ticker; verify the market.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(result.symbol)
+                        .font(.title2.bold())
+                    Text("\(result.name) · \(result.id)")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+                if loadingCandidates {
+                    ProgressView()
+                } else {
+                    candidatePicker(title: "Binance / USDT", candidates: binanceCandidates, selection: $selectedBinance)
+                    candidatePicker(title: "Coinbase / USD", candidates: coinbaseCandidates, selection: $selectedCoinbase)
+                    Text("Coinbase polling is every 60 seconds and can miss a brief alert breach.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        Button("Back") { project = nil }
+                        Button("Add") { confirm(result) }
+                            .disabled(selectedBinance == nil || selectedCoinbase == nil ||
+                                      selectedBinance == "__none__" && selectedCoinbase == "__none__")
+                    }
+                    .padding(.top, 4)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -302,8 +644,10 @@ private struct AddCoinView: View {
     /// window, which dismisses the whole panel. Every control here must resolve
     /// inside the panel itself.
     private func candidatePicker(title: String, candidates: [VenueCandidate], selection: Binding<String?>) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption.bold()).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.title3.bold())
+                .padding(.bottom, 4)
             candidateRow(label: "No market", value: "__none__", selection: selection)
             ForEach(candidates) { candidate in
                 candidateRow(
@@ -313,7 +657,10 @@ private struct AddCoinView: View {
                 )
             }
             if candidates.isEmpty {
-                Text("No ticker-matched candidates.").font(.caption2).foregroundStyle(.secondary)
+                Text("No ticker-matched candidates.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 7)
             }
         }
     }
@@ -322,15 +669,21 @@ private struct AddCoinView: View {
         Button {
             selection.wrappedValue = value
         } label: {
-            HStack(spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Image(systemName: selection.wrappedValue == value ? "largecircle.fill.circle" : "circle")
                     .foregroundStyle(selection.wrappedValue == value ? Color.accentColor : .secondary)
-                Text(label).font(.caption)
+                    .frame(width: 20, alignment: .center)
+                Text(label)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer()
             }
+            .padding(.vertical, 7)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private func choose(_ result: SearchResult) {
@@ -400,7 +753,7 @@ private struct AlertEditorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Alert · \(item.symbol)").font(.headline)
+                Text("Alert · \(item.symbol)").font(.title2.bold())
                 Spacer()
                 Button("Cancel", action: close)
             }
@@ -418,11 +771,11 @@ private struct AlertEditorView: View {
             rearmExplanation
             if let alert = item.alert, alert.isEnabled, !alert.isArmed {
                 Text("Currently disarmed — it already fired and is waiting for the re-arm price above.")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.body).foregroundStyle(.orange)
             }
             Text("Coinbase polls every 60 seconds and can miss a brief breach.")
-                .font(.caption).foregroundStyle(.secondary)
-            if let localError { Text(localError).font(.caption).foregroundStyle(.red) }
+                .font(.body).foregroundStyle(.secondary)
+            if let localError { Text(localError).font(.body).foregroundStyle(.red) }
             Spacer()
             HStack {
                 Button("Remove alert") { remove() }
@@ -433,6 +786,7 @@ private struct AlertEditorView: View {
                 Button("Save") { save() }
             }
         }
+        .font(.headline)
     }
 
     /// Spells out the re-arm price.
@@ -461,7 +815,7 @@ private struct AlertEditorView: View {
                     Text("Hysteresis 0 re-arms as soon as the price crosses back; cooldown alone limits repeats.")
                 }
             }
-            .font(.caption)
+            .font(.body)
             .foregroundStyle(.secondary)
         }
     }

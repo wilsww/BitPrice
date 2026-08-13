@@ -8,6 +8,8 @@
     <string>BitPrice</string>
     <key>CFBundleIdentifier</key>
     <string>com.wayne.bitprice</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
     <key>CFBundleName</key>
     <string>BitPrice</string>
     <key>CFBundlePackageType</key>

@@ -12,6 +12,8 @@ sdk_path="$(xcrun --show-sdk-path)"
 rm -rf "$app_path"
 mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources" "$module_cache"
 
+bash "$repo_root/scripts/make-icon.sh" "$app_path/Contents/Resources/AppIcon.icns"
+
 sources=()
 while IFS= read -r -d '' source_file; do
     sources+=("$source_file")

@@ -535,6 +535,78 @@ struct BitPriceTests {
                 try expect(AppModel.formatChange(.percent(Decimal(string: "1.34")!)) == "+1.34%", "change lost decimals")
                 try expect(AppModel.formatChange(.percent(Decimal(string: "0.12")!)) == "+0.12%", "small change collapsed to zero")
                 try expect(AppModel.formatChange(.percent(Decimal(string: "-2.5")!)) == "-2.50%", "negative change formatting")
+
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let model = AppModel(
+                    persistenceStore: try PersistenceStore(rootDirectory: root),
+                    processLock: try ProcessLock(rootDirectory: root),
+                    restClients: clients(transport: StubHTTPTransport([])),
+                    feedController: controllerParts().controller,
+                    notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
+                    continuousClock: FixedContinuousClock(),
+                    suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false,
+                    observeSleepWake: false
+                )
+                try expect(model.menuBarTitle == "BitPrice", "menu title without a primary quote")
+                model.feedDidAccept(BinanceTick(
+                    productID: "BTCUSDT",
+                    price: Decimal(string: "63928.65")!,
+                    changePercent: Decimal(string: "1.34")!,
+                    eventDate: Date(timeIntervalSince1970: 2_000),
+                    receivedInstant: FixedContinuousClock().now()
+                ))
+                try expect(model.menuBarTitle == "BTC 63,928.65", "menu title omitted the primary symbol and price")
+                model.shutdown()
+            },
+            AcceptanceTest(name: "22b chart axis calculations") {
+                let start = Date(timeIntervalSince1970: 1_000)
+                let normal = [
+                    CandlePoint(bucketStart: start, close: 10),
+                    CandlePoint(bucketStart: start.addingTimeInterval(1_800), close: 20),
+                    CandlePoint(bucketStart: start.addingTimeInterval(3_600), close: 30),
+                    CandlePoint(bucketStart: start.addingTimeInterval(7_200), close: 40)
+                ]
+                try expect(
+                    ChartAxisCalculator.priceTicks(for: normal) == [10, 20, 30, 40],
+                    "normal price range ticks do not span the actual minimum and maximum"
+                )
+                try expect(
+                    ChartAxisCalculator.timeTicks(for: normal) == [
+                        start,
+                        start.addingTimeInterval(3_600),
+                        start.addingTimeInterval(7_200)
+                    ],
+                    "time ticks were not selected from actual point timestamps"
+                )
+
+                let flat = [
+                    CandlePoint(bucketStart: start, close: Decimal(string: "0.33")!),
+                    CandlePoint(bucketStart: start.addingTimeInterval(60), close: Decimal(string: "0.33")!)
+                ]
+                try expect(
+                    ChartAxisCalculator.priceTicks(for: flat) == [Decimal(string: "0.33")!],
+                    "flat price range did not collapse to one truthful tick"
+                )
+                try expect(
+                    ChartAxisCalculator.priceFraction(
+                        Decimal(string: "0.33")!,
+                        minimum: Decimal(string: "0.33")!,
+                        maximum: Decimal(string: "0.33")!
+                    ) == 0.5,
+                    "flat price range did not stay centered"
+                )
+
+                let single = [CandlePoint(bucketStart: start, close: Decimal(string: "63824.73")!)]
+                try expect(
+                    ChartAxisCalculator.priceTicks(for: single) == [Decimal(string: "63824.73")!],
+                    "single-point price range fabricated ticks"
+                )
+                try expect(ChartAxisCalculator.timeTicks(for: single) == [start], "single-point time range fabricated ticks")
+                try expect(ChartAxisCalculator.priceTicks(for: []).isEmpty, "empty price range fabricated ticks")
+                try expect(ChartAxisCalculator.timeTicks(for: []).isEmpty, "empty time range fabricated ticks")
             },
             AcceptanceTest(name: "23 packaging prohibitions and plist facts") {
                 try expect(!FileManager.default.fileExists(atPath: "Package.swift"), "Package.swift exists")
@@ -543,6 +615,7 @@ struct BitPriceTests {
                 let plist = NSDictionary(contentsOfFile: "Info.plist")
                 try expect(plist?["LSUIElement"] as? Bool == true, "LSUIElement missing")
                 try expect(plist?["LSMinimumSystemVersion"] as? String == "14.0", "minimum system wrong")
+                try expect(plist?["CFBundleIconFile"] as? String == "AppIcon.icns", "app icon reference missing")
             }
         ]
     }

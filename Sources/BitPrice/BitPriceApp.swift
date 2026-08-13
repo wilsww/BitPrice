@@ -17,8 +17,10 @@ struct BitPriceApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra(model.menuBarTitle, systemImage: "bitcoinsign.circle") {
+        MenuBarExtra {
             ContentView(model: model)
+        } label: {
+            Text(model.menuBarTitle)
         }
         .menuBarExtraStyle(.window)
     }

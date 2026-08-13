@@ -19,6 +19,7 @@ sources=(
     Sources/BitPrice/AlertEngine.swift
     Sources/BitPrice/NotificationService.swift
     Sources/BitPrice/AppModel.swift
+    Sources/BitPrice/Views.swift
     Tests/TestMain.swift
 )
 
