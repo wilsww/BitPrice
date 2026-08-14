@@ -983,6 +983,84 @@ buffer 為 `ticker(old), superseded, connected(new)`，consumer 一次讀一個�
 
 **結論：不再修訂第七次。** 這六個 blocking 全部是「實作第一天就會撞到並且立刻知道答案」的類型 —— 缺 initializer、缺 token、schema 未定、限流未定。紙上再推一輪只會產出 round-9。改為**帶著這份清單開工**，由編譯器與測試取代 review 當驗證來源。
 
+## 實跑驗證發現（2026-08-13 → 08-14）
+
+七輪規格複審、43 項規定測試、25 項實作測試全數放行。app 在真實桌面首次啟動後，**數分鐘內浮現六個缺陷**。以下為技術根因，非缺陷清單（清單見 `task_plan.md` Phase 5）。
+
+### 平台行為：Swift 6 隔離繼承
+
+`withCheckedContinuation` 的 closure body **繼承呼叫端的 actor 隔離**，不是繼承所在型別的隔離。因此把 `@MainActor` 從 `NotificationService` 型別上移除**不足以**讓 continuation 脫離 main actor —— `AppModel` 從 `Task { @MainActor in }` 呼叫，closure 依然繼承 main actor。UserNotifications 在自己的 queue 回呼，Swift 6 runtime 於 `dispatch_assert_queue` trap。
+
+正確修法：continuation body 明標 `@Sendable`，並把非 Sendable 的 `UNNotificationRequest` **在 closure 內建構**（不可跨邊界捕獲）。
+
+```swift
+nonisolated func submit(...) async -> Result<Void, NetworkFailure> {
+    let makeCenter = self.makeCenter          // @Sendable 工廠 closure
+    return await withCheckedContinuation { @Sendable (continuation: ...) in
+        let request = UNNotificationRequest(...)   // 在內部建構
+        makeCenter().add(request) { error in ... }
+    }
+}
+```
+
+未使用 `@preconcurrency` 或 `@unchecked Sendable`。若用了，這個 trap 會被壓成 silent data race。
+
+### 平台行為：`MenuBarExtra(.window)` 的生命週期
+
+面板在**失去 key window 狀態的瞬間關閉**。任何開啟獨立 window 或 popup 的呈現方式都會觸發：`.sheet`、`.popover`、`.alert`、`.confirmationDialog`、`NSAlert`、menu-style `Picker`。
+
+後果是「按任何按鈕，程式就消失」—— 看起來像崩潰，實際是設計行為。全部編輯器改由 `PanelRoute` enum 就地替換面板內容；venue 選擇改 inline radio rows，direction 改 `.segmented`。
+
+### 平台行為：`MenuBarExtra(_:systemImage:)` 靜默丟棄標題
+
+```swift
+MenuBarExtra(model.menuBarTitle, systemImage: "bitcoinsign.circle")  // 只渲染圖示
+```
+
+該 initializer **只渲染圖片**，標題參數無任何效果且無警告。`menuBarTitle` 全程正確產出 `"BTC 63,928.65"`，bar 上卻只有一個孤立字符。改用 `label:` 形式即恢復。
+
+### 平台行為：`LSUIElement` 移除所有內建退出途徑
+
+`LSUIElement=true` 隱藏 Dock icon，連帶移除 app menu。app 因此**沒有任何退出方式**，`pkill` 是唯一出口。menu bar app 必須自己提供退出鍵。
+
+### 資訊揭露也是正確性問題
+
+兩個缺陷的引擎邏輯完全正確，缺陷在 UI 從未揭露規則：
+
+1. **hysteresis** — 1% hysteresis 套在 63,966 門檻上，等於價格要跌 640 才 re-arm。使用者看到的是「alert 只跳一次就壞了」。修法不是改引擎，是在編輯器明寫觸發價與計算後的 re-arm 價，並在目前 disarmed 時明說
+2. **漲跌%取整** — `NSDecimalNumber.rounding(nil)` 把 `+1.34%` 印成 `+1%`、把任何低於半個百分點的變動印成 `+0%`。這讀起來像解析失敗，不像格式選擇
+
+`規格正確 + 實作正確 = 使用者認為壞掉` 是可能的。
+
+### 測試為何全數放行
+
+原 test 22 斷言漲跌%的**正負號**，不斷言小數位，因此在 `+0%` 的情況下依然通過。其餘缺陷全部落在測試的注入邊界之外：測試跑的是 fake transport 與 fake notification center，而缺陷在 SwiftUI 生命週期、UserNotifications 真實 queue、與 UI 文案。
+
+**測試與複審能證明的東西有明確上限。** 這六項沒有一項可以靠再讀一次文件發現。
+
+### 座標軸與「絕不造假」
+
+`ChartAxisCalculator` 的價格刻度取自序列真實 min/max，時間刻度取自真實時間戳。三個退化情況明確定義：
+
+- flat 序列 → 收斂為單一真實刻度並置中，**不除以零區間**
+- 單點 → 不虛構區間
+- 空序列 → 不產生刻度
+
+這裡回收了 Phase 2.19 的一項決定：當初捨棄 CoinGecko 批次 sparkline、改用有時間戳的 1h K 線，理由是「無時間戳就無法誠實宣稱 24 小時」。UI 階段證明同一份時間戳也是畫得出 X 軸的唯一條件。
+
+### 環境：TCC 阻擋終端存取 `~/Documents`
+
+使用者的 `ls: Operation not permitted` 與 `open` 回 `kLSApplicationNotFoundErr` **不是 bundle 損壞**（已驗證 `APPL` 型別與 executable 完好）。macOS 隱私保護阻擋終端讀取 `~/Documents`。複製至 `~/Applications` 即可繞開。
+
+### 使用者回報的前提需要查證
+
+三項 UI 主張中兩項不成立：
+
+- 「星號無任何作用」→ 星號設定 `primaryItemID`，直接驅動 `menuBarTitle`。**問題是沒有任何東西說明它做什麼**，不是它沒作用
+- 「沒有圖示」→ 圖示已正確產生（10 個尺寸、256px 為 60 KB 非空白像素），Finder 顯示的是舊快取
+
+照單全收會刪掉一個正確且必要的功能，並重做一個已經正確的東西。改以 AskUserQuestion 把查證結果交回使用者裁決。
+
 ## 資源
 
 - CoinGecko API 定價：https://www.coingecko.com/en/api/pricing

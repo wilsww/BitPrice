@@ -232,33 +232,76 @@
   - `progress.md`（本節）
 - **教訓**：revision 4.2 的四項修改有三項引入新缺陷，且都是同一形狀 —— 文字描述的機制讀起來成立，但介面 supply 不了它需要的東西，或粒度細不到它要偵測的層級。這已是連續第四輪。本輪 role prompt **已明白寫出這個形狀並要求 lens 針對它查**，我仍在同一次修訂中又犯三次。把失敗模式寫進委派說明防不住自己再犯，只有換人審才擋得住
 
-### Phase 3: 實作 — 專案骨架與資料層
-- **狀態:** pending（**gated** — round-7 判 reject，2 blocker 未修；串流介面須整體重設計後才可開工）
+### Phase 2.18–2.20: 串流重設計、`SPEC.md` 與其複審（2026-08-12 → 08-13）
+- **狀態:** complete（詳見 `task_plan.md` Phase 2.18–2.20）
 - 執行動作:
-  -
+  - Phase 2.18 由主 agent 重寫 §4.3 契約 → 審查判 **reject**（`.superseded` barrier 假設 `AsyncStream.Continuation` 有 purge 能力，該操作不存在）
+  - Phase 2.19 改委派 Codex 從零重新設計（`run_id=rd1`），產出 **`SPEC.md`（638 行）**，`IMPLEMENTATION.md` 降為歷史
+  - Phase 2.20 全新 thread 雙 lens 獨立複審 `SPEC.md`（`run_id=spec1`）→ 判 **reject**，15 項缺陷（6 blocking），四項兩 lens 獨立收斂
+  - 判定：主架構未被推翻，但六個 blocking 中至少三個是同一失敗形狀的新實例 —— **換作者未換掉形狀**
+  - 決定**不再修訂第七次**。理由：這六項全屬「實作第一天就會撞到並且立刻知道答案」的類型，紙上再推一輪只會產出 round-9
 - 建立/修改檔案:
-  -
+  - `SPEC.md`（新建，638 行，取代 `IMPLEMENTATION.md` 成為建置藍圖）
+  - `.planning/redesign/{task_plan,findings,progress}.md`（Codex 自身推理紀錄）
+  - `findings.md`、`task_plan.md`、`progress.md`
 
-### Phase 4: 實作 — UI 與 bundle
-- **狀態:** pending
+### Phase 3–4: 實作（委派 Codex，`run_id=impl1`，2026-08-13）
+- **狀態:** complete
 - 執行動作:
-  -
+  - 15 項複審缺陷**前置為建置需求**而非事後待辦，修法逐項取自兩個 lens 的 `what_would_change_my_mind`
+  - Codex 一次交付可編譯、可測試的完整實作
+  - **我獨立驗收**（非採信 Codex 報告）：乾淨樹 `rm -rf build && bash scripts/build-app.sh` exit 0；`bash scripts/run-tests.sh` 25 passed / 0 failed / 2 skipped（skip 皆印出理由）；`codesign --verify --strict`、`plutil -lint`、`file` 全通過（Mach-O arm64）；`LSUIElement=true`、`LSMinimumSystemVersion=14.0`；grep 確認無 `swift build`／`Package.swift`；受保護四檔 mtime 全部早於 dispatch 21:04
+  - 讀碼抽查三項缺陷修法：`makeLifetimeSession` 終身重用且 `didOpen`/`didClose` 皆帶 `connectionID: UUID`；`actor TokenBucketPacer` Coinbase 10 req/s burst 15 與官方文件一致；v0/v1 JSON fixture 真實存在
+  - **未能驗證**：無 Aqua GUI session → 無法啟動 app、無法驗證通知呈現、無 live network smoke test
 - 建立/修改檔案:
-  -
+  - `Sources/BitPrice/` 11 個檔案（2,841 行）、`Resources/Info.plist`
+  - `scripts/build-app.sh`、`scripts/run-tests.sh`
+  - `Tests/TestMain.swift`（578 行）、`Tests/Fixtures/watchlist-v0.json`、`watchlist-v1.json`
+  - `.planning/impl/{task_plan,findings,progress}.md`
+- **commit:** `21b4961 feat: implement BitPrice from a ground-up respecified architecture`
 
-### Phase 5: 測試與驗證
-- **狀態:** pending
+### Phase 5: 實跑驗證 — 六項缺陷（2026-08-13）
+- **狀態:** complete
 - 執行動作:
-  -
+  - 使用者於真實桌面首次啟動 app。**七輪規格複審、43 項規定測試、25 項實作測試全數放行的六個缺陷，在數分鐘內全部浮現**
+  - 逐項定位與修正（詳見 `findings.md`「實跑驗證發現」節與 commit `e5634ed`）：alert 觸發崩潰、面板每次互動即消失、無退出途徑、存 alert 導致退出、漲跌%取整、hysteresis 不可見
+  - **崩潰修正曾誤報一次**：首次只移除 `NotificationService` 的 `@MainActor` 即宣告修好，使用者回報仍崩。以 binary 複製時間（22:24:24）對照崩潰時間（22:25:59）確認使用者拿的確實是新版，重讀 crash report 為同一 stack。真因是 `withCheckedContinuation` 繼承**呼叫端**隔離，而 `AppModel` 從 `Task { @MainActor }` 呼叫。二次修正後改以 symbol 層級（`YbcfU_` 無 MainActor 標註）加 md5 比對才回報
+  - 使用者實測確認：通知橫幅送達；關閉 Wi-Fi 轉 stale、開啟即回 live（不需等 90 秒）。**此復原路徑正是四輪紙上複審都沒改對的那條**
+  - 使用者環境問題釐清：`ls: Operation not permitted` 與 `open` 失敗為 TCC 阻擋終端存取 `~/Documents`，非 bundle 損壞（已驗證 `APPL` 與 executable 完好）
 - 建立/修改檔案:
-  -
+  - `Sources/BitPrice/NotificationService.swift`、`Views.swift`、`AppModel.swift`
+  - `Tests/TestMain.swift`（test 22 加 decimal 回歸斷言）
+- **commit:** `e5634ed fix: six defects found by running the app for the first time`
+
+### Phase 5.1: UI 三輪重整（委派 Codex，`run_id=ui1/ui2/ui3`，2026-08-13 → 08-14）
+- **狀態:** complete
+- 執行動作:
+  - **ui1**（4 項）：app 無圖示、bar 只有小 icon 看不到價格、文字過小、版面需改為一列一幣 + 底部走勢圖
+    - 根因之一為 API 誤用：`MenuBarExtra(_:systemImage:)` **只渲染圖片並靜默丟棄標題**，`menuBarTitle` 一直正確產出 `"BTC 63,928.65"` 卻從未顯示。改用 `label:` 形式
+    - 圖示以 `scripts/make-icon.swift` 程式繪製，`make-icon.sh` 產生 10 個尺寸的 iconset 後 `iconutil` 打包，build 時嵌入。無第三方素材、無 binary 進版控
+    - 列重構為單行（star / symbol / quote / price / change% / Alert）；sparkline、mapping IDs、排序鍵移入底部詳細區
+  - **ui2**（2 項）：退出鍵移至標題左側並改為確認式（新增 `PanelRoute.confirmQuit`）；Add coin 搜尋列改固定寬度前導欄以對齊
+  - **ui3**（4 項）：走勢圖補 X/Y 座標軸、文字再放大、星號存廢、圖示未見
+    - **兩項使用者前提經查證不成立**，未照單全收：星號**確實有作用**（設定 `primaryItemID`，驅動 `menuBarTitle`）；圖示**已正確產生**（10 尺寸、256px 為 60 KB 非空白），Finder 顯示的是舊快取。以 AskUserQuestion 交回使用者裁決，選擇為「保留星號但加強說明」與「先只清快取」
+    - `ChartAxisCalculator` 取真實 min/max 與真實時間戳，三個退化情況（flat / 單點 / 空序列）皆處理並以 test 22b 斷言，涵蓋 63,824 與 0.33 兩種價格尺度
+  - 三輪皆以硬約束派工：禁 `.sheet`/`.popover`/`.alert`/`.confirmationDialog`/`NSAlert`/menu-style `Picker`（`MenuBarExtra(.window)` 失去 key window 即關閉）、禁 `.keyboardShortcut`、禁動 `NotificationService.swift`、禁 `@preconcurrency`/`@unchecked Sendable`/`Task.detached`、禁 SwiftPM、禁造假資料。每條約束都來自一個已發生的崩潰或缺陷
+  - 驗收：乾淨樹建置 exit 0（zero warnings）、`26 passed / 0 failed / 2 skipped`、bundle 檢查全過且含 `AppIcon.icns`、grep 自身 diff 確認無禁用 API 復活
+- 建立/修改檔案:
+  - `Sources/BitPrice/Views.swift`（主要）、`BitPriceApp.swift`
+  - `scripts/make-icon.sh`、`scripts/make-icon.swift`、`scripts/build-app.sh`
+  - `Tests/TestMain.swift`（新增 test 22b）
+  - `.planning/ui/{task_plan,findings,progress}.md`
+- **commit:** `22150b8 feat: rework the panel UI around a compact row list and a detail area`
+- **未驗證（本機無 Aqua GUI session）**：版面比例、字級是否足夠、座標軸標籤是否擁擠、圖示清快取後外觀 —— 只有桌面前的人能判斷
 
 ### Phase 6: 交付
-- **狀態:** pending
+- **狀態:** in progress
 - 執行動作:
-  -
+  - 四個 commit 就緒：`7fe35df`（規格）→ `21b4961`（實作）→ `e5634ed`（實跑修正）→ `22150b8`（UI 重整）
+  - 已提供安裝與清快取步驟（複製至 `~/Applications` 以繞開 TCC 對 `~/Documents` 的阻擋）
+  - **待辦**：使用者回報 ui3 視覺結果；撰寫使用說明
 - 建立/修改檔案:
-  -
+  - （待）
 
 ## 測試結果
 
@@ -291,16 +334,23 @@ API 可用性實測（2026-08-03，Phase 1）：
 | 2026-08-03 18:52 | Codex：`uppercase(symbol) + quoteAsset` 經 exchangeInfo 驗證只證明交易對存在，不證明與 CoinGecko id 同一項目（symbol 不唯一，可能是 wrapped/bridged 代幣） | 1 | 列 B2，改 `MarketMapping{coinGeckoID, exchange, productID, baseAsset, quoteAsset}` 一級產物 |
 | 2026-08-03 18:52 | Codex：socket 有 5 個來源可各自轉換狀態（watchlist 變更/23h 重連/backoff/receive 失敗/睡眠喚醒），互相競態 | 1 | revision 2 曾改用動態 SUBSCRIBE/UNSUBSCRIBE；revision 4 撤回後以單一 owned task、local session UUID 與 combined URL rebuild 簡化 |
 | 2026-08-03 18:52 | Codex：app 層 `sendPing` **不能取代**回應 server 發起的 ping frame；5 msg/sec 限額涵蓋所有控制流量 | 1 | 列 M1，修正 §2.1 描述 |
+| 2026-08-13 22:25 | 觸發 alert 時 app 整個崩潰，`dispatch_assert_queue` trap | 2 | 第一次只移除 `NotificationService` 的 `@MainActor`，**我宣告修好但實際仍崩**。真因：`withCheckedContinuation` 繼承**呼叫端**隔離，`AppModel` 從 `Task { @MainActor }` 呼叫。改為每個 continuation body 明標 `@Sendable`，非 Sendable 的 `UNNotificationRequest` 在 closure 內建構。未用 `@preconcurrency` 或 `@unchecked Sendable` |
+| 2026-08-13 22:30 | 點任何按鈕或下拉選單，面板整個消失 | 1 | `MenuBarExtra(.window)` 失去 key window 即關閉，而 `.sheet` 與 menu-style `Picker` 正好造成此事。編輯器改由 `PanelRoute` enum 就地替換面板內容；venue 改 inline radio、direction 改 `.segmented` |
+| 2026-08-13 22:35 | 存 alert 按 Save 後 app 自動退出 | 1 | 我自己加的退出鍵造成的回歸：Save 帶 `.defaultAction`、quit 帶 `⌘Q`，`close()` 回到清單後同一個鍵盤事件抵達 quit。兩個 shortcut 全移除，quit 改兩段式 |
+| 2026-08-13 22:40 | 漲跌% 顯示 `+0%`／`+1%`，看似解析失敗 | 1 | `NSDecimalNumber.rounding(nil)` 取整。改 `NumberFormatter` 固定兩位小數 + `positivePrefix = "+"`。原 test 22 只斷言正負號故一路通過，已補小數回歸斷言 |
+| 2026-08-13 22:42 | alert 只跳一次，之後需重設才會再觸發 | 1 | 引擎正確、UI 從未揭露規則：1% hysteresis 在 63,966 門檻上等於要跌 640 才 re-arm。編輯器改為明寫觸發價與計算後的 re-arm 價，並在目前 disarmed 時明說 |
+| 2026-08-13 23:50 | 使用者 `ls: Operation not permitted`、`open build/BitPrice.app` 回 `kLSApplicationNotFoundErr` | 1 | 非 bundle 損壞（已驗證 `APPL` 與 executable 完好）。TCC 阻擋終端存取 `~/Documents`；改複製至 `~/Applications` |
+| 2026-08-14 00:00 | 使用者回報「星號無作用」「沒有圖示」 | 1 | **兩項前提查證後皆不成立**：星號確實設定 `primaryItemID` 並驅動 `menuBarTitle`；圖示已正確產生（10 尺寸、256px 60 KB 非空白），Finder 顯示舊快取。未照單修改，改以 AskUserQuestion 交回使用者裁決 |
 
 ## 五問重啟檢查
 
 | 問題 | 答案 |
 |------|------|
-| 我在哪裡？ | Phase 2.17 進行中 — round-7 複審已完成並判 **reject**（20 項全 `true_hit`：2 blocking、12 major、6 minor）。四則短修正已補（850 行、43 tests）；**兩個 FLAG 未動，另開 session**：串流介面整體重設計、其餘既存 major/minor |
-| 我要去哪裡？ | 串流介面重設計（新 session）→ 其餘既存缺陷 → 再複審 → Phase 3（骨架 + 資料層）→ Phase 4（UI + bundle）→ Phase 5（測試，依 §8 的 43 項）→ Phase 6（交付） |
+| 我在哪裡？ | Phase 6 進行中 — app 已實作、實跑修正、UI 三輪重整完畢，四個 commit 就緒（`7fe35df` → `21b4961` → `e5634ed` → `22150b8`）。建置與測試全綠（26 passed / 0 failed / 2 skipped）。**等使用者回報 ui3 的視覺結果** |
+| 我要去哪裡？ | 使用者確認 UI → 依回報微調 → 撰寫使用說明 → 交付。實作期風險清單（round-7 C 群 6 項）依實際遇到再處理 |
 | 目標是什麼？ | macOS menu bar app：bar 顯示單一主幣即時價，點擊展開自訂清單（符號 + 24h sparkline + 價格 + 漲跌%），支援搜尋、持久化與 alerts；免 Xcode，以 `scripts/build-app.sh` 直接驅動 `swiftc` 並手工組裝 ad-hoc-signed `.app` bundle |
-| 我學到了什麼？ | (1) CoinGecko 免費配額撐不住即時價格，Binance klines 無批次；(2) SwiftPM 在此工具鏈因 `PackageDescription.Package.__allocating_init` undefined symbol 無法使用，deployment target 必須降至 macOS 14.0；(3) bare executable 會以 `bundleProxyForCurrentProcess is nil` 崩潰；(4) round 1–2 找到真實設計缺口，round 3–4 多半找到前版修訂自行引入的矛盾，round 5 換模型後判定整體過度設計，round 6 抓到的是簡化時斷掉的連接點（不是複雜度不足）；(5) 前四輪都漏掉 clock-source 錯誤，8 項時間量測中 7 項應使用 monotonic clock；(6) 委派回傳後若未當場寫入檔案，結果會遺失 — revision 4 的審查結果就這樣消失九天；(7) round 7 判 reject，且 revision 4.2 四項修改有三項引入新缺陷，形狀一致 —— 文字讀起來成立但介面 supply 不了、或粒度不夠細。已連續四輪。把失敗模式寫進 role prompt 並未防住自己再犯，只有換人審才擋得住 |
-| 我做了什麼？ | 實測環境、5 家 API 與兩種走勢來源；建立規劃與規格；修復 modulemap 工具鏈問題並驗證 `swiftc`/bundle 路徑；完成 revisions 2、3、3.1、3.2、4 與六輪 Codex review；round 5 改用 `gpt-5.6-sol`，接受過度設計結論，將規格由 1,369 行/83 tests 簡化為 598 行/24 tests；round 6 取得 revision 4 首次獨立審查（1 blocker、9 major、4 minor），結果已從 session 紀錄復原並收錄，Phase 2.16 待修訂 |
+| 我學到了什麼？ | (1) CoinGecko 免費配額撐不住即時價格，Binance klines 無批次；(2) SwiftPM 在此工具鏈因 `PackageDescription.Package.__allocating_init` undefined symbol 無法使用，deployment target 必須降至 macOS 14.0；(3) bare executable 會以 `bundleProxyForCurrentProcess is nil` 崩潰；(4) round 1–2 找到真實設計缺口，round 3–4 多半找到前版修訂自行引入的矛盾，round 5 換模型後判定整體過度設計，round 6 抓到的是簡化時斷掉的連接點；(5) 前四輪都漏掉 clock-source 錯誤，8 項時間量測中 7 項應使用 monotonic clock；(6) 委派回傳後若未當場寫入檔案，結果會遺失 — revision 4 的審查結果就這樣消失九天；(7) 同一失敗形狀連續出現五次（介面 supply 不了機制所需、粒度不夠細、假設不存在的平台操作），把失敗模式寫進 role prompt 防不住自己再犯，換人審才擋得住 —— 但 Phase 2.20 證明**換作者也換不掉形狀**，`SPEC.md` 六個 blocking 中三個仍是同一形狀；(8) **紙上複審有其上限**。七輪複審 + 43 項規定測試 + 25 項實作測試全數放行的六個缺陷，在真實桌面啟動後數分鐘內全部浮現。測試跑的是注入的 fake，複審讀的是文件 —— 文件不能被點擊；(9) 使用者回報的缺陷前提**必須先查證**。三項 UI 主張中有兩項不成立（星號有作用、圖示已產生），照單全收會刪掉正確功能；(10) 宣告修好前要驗到 symbol 層級。alert 崩潰第一次我看原始碼就宣告修好，實際仍崩 |
+| 我做了什麼？ | 實測環境、5 家 API 與兩種走勢來源；建立規劃與規格；修復 modulemap 工具鏈問題並驗證 `swiftc`/bundle 路徑；完成 revisions 2–4.3 與七輪 Codex review；round 5 換模型後接受過度設計結論，規格由 1,369 行/83 tests 簡化為 598 行/24 tests；round 7 判 reject 後放棄第七次紙上修訂，委派 Codex 從零重寫為 `SPEC.md`；獨立複審再判 reject 後**帶著 15 項清單開工**，由編譯器與測試取代 review 當驗證來源。實作一次交付即通過乾淨樹嚴格建置與全部測試；實跑抓到六個缺陷並修正；UI 三輪重整完成。四個 commit 已入版控 |
 
 ---
 *每階段完成或遇到錯誤後更新*
