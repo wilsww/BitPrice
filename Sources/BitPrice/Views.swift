@@ -307,16 +307,26 @@ struct ContentView: View {
                         .frame(maxHeight: .infinity)
                         Divider()
                         if let selectedItem {
-                            ScrollView {
+                            ViewThatFits(in: .vertical) {
                                 SelectedCoinDetail(
                                     model: model,
                                     item: selectedItem,
-                                    chartHeight: chartHeight(for: detailHeight)
+                                    chartFillsAvailableHeight: true
                                 ) {
                                     removeSelectedItem()
                                 }
-                                .frame(maxWidth: .infinity, minHeight: detailHeight, alignment: .top)
+                                ScrollView {
+                                    SelectedCoinDetail(
+                                        model: model,
+                                        item: selectedItem,
+                                        chartFillsAvailableHeight: false
+                                    ) {
+                                        removeSelectedItem()
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .top)
+                                }
                             }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                             .frame(height: detailHeight)
                         } else {
                             EmptyDetailView(hasItems: true)
@@ -366,11 +376,6 @@ struct ContentView: View {
         let minimumListHeight: CGFloat = 180
         let requestedHeight = max(300, availableHeight * 0.5)
         return min(requestedHeight, max(0, availableHeight - minimumListHeight - 1))
-    }
-
-    private func chartHeight(for detailHeight: CGFloat) -> CGFloat {
-        let nonChartHeight = 125 * PanelFont.multiplier(for: model.persistedState.textSize)
-        return max(140, detailHeight - nonChartHeight)
     }
 }
 
@@ -586,9 +591,11 @@ private struct EmptyDetailView: View {
 }
 
 private struct SelectedCoinDetail: View {
+    private static let minimumChartHeight: CGFloat = 140
+
     @ObservedObject var model: AppModel
     let item: WatchItem
-    let chartHeight: CGFloat
+    let chartFillsAvailableHeight: Bool
     let remove: () -> Void
 
     var body: some View {
@@ -625,7 +632,10 @@ private struct SelectedCoinDetail: View {
 
             if let chart = model.charts[item.id] {
                 Sparkline(series: chart, color: chartColor)
-                    .frame(height: chartHeight)
+                    .frame(
+                        minHeight: Self.minimumChartHeight,
+                        maxHeight: chartFillsAvailableHeight ? .infinity : nil
+                    )
                 Text("24h chart · \(chart.source.rawValue.capitalized)/\(chart.quoteAsset)")
                     .panelFont(.body)
                     .foregroundStyle(.secondary)
@@ -638,7 +648,11 @@ private struct SelectedCoinDetail: View {
                 Label("24h chart unavailable", systemImage: "chart.xyaxis.line")
                     .panelFont(.body)
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 200)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: Self.minimumChartHeight,
+                        maxHeight: chartFillsAvailableHeight ? .infinity : nil
+                    )
             }
 
             mappingDetails

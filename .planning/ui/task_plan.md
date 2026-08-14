@@ -116,6 +116,25 @@ Complete
 - Gradient fill follows the row quote direction and breaks across the existing 90-minute gaps; no fabricated baseline was added.
 - Strict build, existing tests, bundle checks, and source-policy audits passed. No Aqua GUI session was available for visual confirmation.
 
+### Phase 25: Replace estimated detail sizing with measured layout
+- [x] Read the current detail container and chart implementation
+- [x] Remove the detail ScrollView/minHeight pairing and multiplier-based height estimate
+- [x] Let a finite detail VStack allocate remaining height to the chart while preserving the chart floor
+- [x] Keep empty and populated detail branches aligned and preserve all chart drawing behavior
+- **Status:** complete
+
+### Phase 26: Verify and record UI12
+- [x] Reason through Medium, Extra Large, and no-scroll-indicator cases
+- [x] Run strict build, full tests, bundle checks, and source-policy audits
+- [x] Record why estimate-and-subtract failed and the measured-container strategy
+- [x] Write `.codex-implement/_codex_impl_summary_ui12.md`
+- **Status:** complete
+
+## UI12 completion
+- The normal selected-detail path now uses `ViewThatFits` to choose a plain finite detail stack first; its chart greedily fills the measured remainder after naturally sized siblings.
+- The 140-point chart floor is retained. Only the fallback path, selected when the measured stack plus floor cannot fit, uses a detail `ScrollView`; empty/no-selection branches retain the same detail-region height.
+- The prior guessed reserve and `minHeight`/`ScrollView` pairing are gone. Strict build/tests and source-policy audits passed; no Aqua GUI session was available.
+
 
 
 ### Phase 11: Implement Settings layout, text-size preference, and icon scaling

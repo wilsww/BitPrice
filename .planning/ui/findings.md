@@ -156,6 +156,9 @@
 - No Aqua GUI session exists. A human desktop check must confirm the one-line mapping summary and long-ID tooltip are comfortable in the actual panel.
 
 ## UI11: flexible detail chart and directional fill
+- UI12 correction: the prior `125 * multiplier` reserve was only an estimate of sibling-view height. It could exceed the real stack and leave dead space, or undershoot it and make the `minHeight` detail child inside a `ScrollView` advertise overflow and show a scrollbar.
+- The normal selected-detail path must be a plain finite-height `VStack`; the header, disclosure, optional stale line, and mapping line size naturally, while a greedy chart fills the remaining proposal. The chart floor is a safety constraint, not a substitute for measurement.
+- Scrolling must not surround content that fits. If the detail region cannot satisfy the natural text stack plus chart floor at Extra Large, only that true overflow path may scroll; the no-selection and no-items empty branches retain the same computed detail-region height.
 - A ScrollView proposes unbounded height along its scroll axis. A greedy chart inside it cannot fill the visible detail region reliably, so the fix uses an outer bounded `GeometryReader` and passes an explicit finite chart height into `SelectedCoinDetail`.
 - The list/detail body shares its available height: the detail receives half the body, with a 300-point target floor constrained by a 180-point minimum list region. This removes the fixed 350-point branch while keeping the empty-detail and selected/no-selection branches aligned.
 - Chart height is the bounded detail height minus a text-size-scaled non-chart reserve, with a 140-point floor. At Extra Large the chart can shrink to that floor and the finite detail ScrollView can scroll if header/disclosure/mapping content genuinely exceeds the region; the outer panel frame still comes only from the text-size preference.

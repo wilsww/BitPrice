@@ -308,3 +308,27 @@
 - Final added-line audit found none of `sheet(`, `popover(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, `Form {`, or `.system(size:`; `NotificationService.swift` is unchanged.
 - No app launch or visual verification was attempted because this host has no Aqua GUI session. A desktop check remains necessary for tall-axis spacing, chart fill appearance, and Extra Large overflow behavior.
 - Wrote `.codex-implement/_codex_impl_summary_ui11.md`.
+
+## UI12 session: 2026-08-15
+
+### Phase 25: Replace estimated detail sizing with measured layout
+- **Status:** in_progress
+- Read the planning skill, current planning records, and the requested source context before editing.
+- Confirmed the defect remains in `ContentView.listContent`: the selected detail is still a fixed-height `ScrollView`, its child is pinned with `minHeight: detailHeight`, and `chartHeight(for:)` subtracts `125 * PanelFont.multiplier(...)` rather than measuring sibling views.
+- The implementation will use a finite detail-region `VStack` directly for the normal case. The chart will receive `.frame(maxHeight: .infinity)` after the natural header/disclosure/mapping content, with a minimum chart floor; a scroll container will be reserved only for the genuinely-too-small overflow case.
+- Planning append attempts initially used stale exact context and failed without changing repository content; I reread the tails and applied the phase records with smaller, targeted patches.
+
+### Phase 25: Implement measured detail layout
+- **Status:** complete
+- Replaced the selected-detail `ScrollView`/`minHeight` pairing with `ViewThatFits(in: .vertical)`: the first candidate is a plain finite detail stack, and the second is an intrinsic-height detail inside `ScrollView` for genuine overflow only.
+- Removed `chartHeight(for:)` and its `125 * PanelFont.multiplier(...)` estimate. `SelectedCoinDetail` now gives the chart a 140-point minimum and `.frame(maxHeight: .infinity)` only in the fitting branch, so the chart receives the actual leftover proposal after its siblings.
+- Applied the same chart-floor behavior to the unavailable-chart placeholder; the empty and no-selection branches still use the same computed `detailHeight`.
+- Preserved the existing chart color, per-segment gradient fill, true plot bounds, axes, disclosures, and controls.
+
+### Phase 26: Verify and record UI12
+- **Status:** complete
+- `bash scripts/run-tests.sh`: 32 passed, 0 failed, 2 expected no-Aqua skips.
+- `bash scripts/build-app.sh`: passed under strict Swift 6 warnings-as-errors; plist lint, codesign verification, `otool -L`, and `Contents/Resources/AppIcon.icns` checks passed.
+- Added-line audits found no forbidden presentation APIs, shortcuts, `Form`, or fixed font sizes; no `chartHeight` or `125 * multiplier` estimate remains, and non-target behavior files are unchanged.
+- Reasoning: at Medium, the finite first candidate lays out the header/disclosure/mapping rows naturally and the greedy chart consumes all remaining detail height, leaving no unallocated band. At Extra Large, if those measured rows plus the 140-point floor do not fit, `ViewThatFits` selects the intrinsic content fallback so text remains reachable by scrolling. When the content fits, the first candidate is selected and no scroll indicator exists.
+- No layout test was added because this is a pure SwiftUI presentation restructure; the existing test suite and strict build provide compile/regression coverage.
