@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 struct TestFailure: Error, CustomStringConvertible {
     let description: String
@@ -780,6 +781,18 @@ struct BitPriceTests {
                 try expect(ChartAxisCalculator.timeTicks(for: single) == [start], "single-point time range fabricated ticks")
                 try expect(ChartAxisCalculator.priceTicks(for: []).isEmpty, "empty price range fabricated ticks")
                 try expect(ChartAxisCalculator.timeTicks(for: []).isEmpty, "empty time range fabricated ticks")
+            },
+            AcceptanceTest(name: "22c panel font multiplier mapping") {
+                let preferences: [TextSizePreference] = [.small, .medium, .large, .extraLarge]
+                let factors = preferences.map(PanelFont.multiplier)
+                try expect(factors[1] == 1.0, "medium font multiplier changed")
+                try expect(factors == factors.sorted() && Set(factors).count == factors.count,
+                           "text-size font multipliers are not strictly increasing")
+                let base = PanelFont.basePointSize(for: Font.TextStyle.body)
+                try expect(
+                    PanelFont.pointSize(for: .body, preference: .medium) == base,
+                    "medium derived font size does not equal its base size"
+                )
             },
             AcceptanceTest(name: "23 packaging prohibitions and plist facts") {
                 try expect(!FileManager.default.fileExists(atPath: "Package.swift"), "Package.swift exists")

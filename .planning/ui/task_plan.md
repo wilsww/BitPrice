@@ -6,6 +6,24 @@ Implement the app icon, textual menu-bar price, larger typography, compact selec
 ## Current phase
 Complete
 
+### Phase 13: Implement macOS font scaling and header icon alignment
+- [x] Read the current UI6 sources and restore planning context
+- [x] Replace ignored macOS dynamic type behavior with one central scaled-font helper
+- [x] Switch header icons to visually matched circled symbols
+- [x] Add Medium/base-size and multiplier regression coverage
+- **Status:** complete
+
+### Phase 14: Verify and record UI6
+- [x] Run final strict build, tests, bundle checks, and audits after the last source edit
+- [x] Record the macOS DynamicTypeSize platform finding and accepted tradeoff
+- [x] Write `.codex-implement/_codex_impl_summary_ui6.md`
+- **Status:** complete
+
+## UI6 completion
+- `PanelFont` is the sole fixed-size font construction point; the medium multiplier remains exactly 1.0 and all four steps are covered by tests.
+- Final strict build and bundle checks passed. The full harness reports 31 passed, 0 failed, and 2 expected no-Aqua skips.
+- No Aqua GUI session was available, so Medium visual parity, Extra Large usability, and circled-icon balance still need desktop confirmation.
+
 ### Phase 11: Implement Settings layout, text-size preference, and icon scaling
 - [x] Read the current UI5 sources, planning records, tests, and build scripts
 - [x] Add persisted stable text-size preference with default-medium fallback

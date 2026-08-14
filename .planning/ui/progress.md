@@ -160,3 +160,22 @@
 - Added-line grep found none of `sheet(`, `popover(`, `alert(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, or `.system(size:`; no forbidden concurrency/build additions were found.
 - No app launch or visual verification was attempted because the host has no Aqua GUI session.
 - Wrote `.codex-implement/_codex_impl_summary_ui5.md`.
+
+## UI6 session: 2026-08-14
+
+### Phase 13: Implement macOS font scaling and header icon alignment
+- **Status:** complete
+- Reread the requested sources and restored the existing `.planning/ui/` records.
+- Replaced UI5's ineffective macOS `.dynamicTypeSize` text assumption with `PanelFont.scaledFont`, using AppKit semantic base sizes and multipliers 0.85, 1.0, 1.2, and 1.45; all panel font call sites route through the central helper.
+- Replaced `.imageScale(.large)` glyph sizing with the same scaled font path and changed header symbols to `plus.circle` and `gearshape.circle`.
+- Added the multiplier ordering, exact Medium factor, and Medium/base-size regression test.
+- Intermediate test run passed: 31 passed, 0 failed, 2 expected no-Aqua skips. Intermediate strict build passed before the final one-line helper formatting change.
+
+### Phase 14: Verify and record UI6
+- **Status:** complete
+- Final `bash scripts/build-app.sh` exited 0 under strict Swift 6 warnings-as-errors; plist lint, codesign verification, `otool -L`, and the bundled `AppIcon.icns` check passed.
+- Final `bash scripts/run-tests.sh` reported 31 passed, 0 failed, and 2 expected no-Aqua skips.
+- Final audits passed: `git diff --check`; forbidden presentation/shortcut additions absent; only the central `PanelFont` helper contains `.system(size:)`; `dynamicTypeSize` and `.imageScale` are absent from the panel; `NotificationService.swift` is unchanged.
+- Recorded the macOS DynamicTypeSize limitation and the accepted fixed-size multiplier tradeoff in `findings.md`.
+- Wrote `.codex-implement/_codex_impl_summary_ui6.md`.
+- No app launch or visual verification was attempted because this host has no Aqua GUI session. A desktop check remains necessary for Medium parity, Extra Large usability, and circled-icon balance.

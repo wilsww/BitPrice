@@ -20,15 +20,6 @@ struct ChartPriceBounds: Equatable {
 }
 
 private extension TextSizePreference {
-    var dynamicTypeSize: DynamicTypeSize {
-        switch self {
-        case .small: .small
-        case .medium: .medium
-        case .large: .large
-        case .extraLarge: .xLarge
-        }
-    }
-
     var panelWidth: CGFloat {
         switch self {
         case .small: 560
@@ -54,6 +45,75 @@ private extension TextSizePreference {
         case .large: "Large"
         case .extraLarge: "Extra Large"
         }
+    }
+}
+
+enum PanelFont {
+    static func multiplier(for preference: TextSizePreference) -> CGFloat {
+        switch preference {
+        case .small: 0.85
+        case .medium: 1.0
+        case .large: 1.2
+        case .extraLarge: 1.45
+        }
+    }
+
+    static func basePointSize(for style: Font.TextStyle) -> CGFloat {
+        NSFont.preferredFont(forTextStyle: appKitTextStyle(for: style)).pointSize
+    }
+
+    static func pointSize(for style: Font.TextStyle, preference: TextSizePreference) -> CGFloat {
+        basePointSize(for: style) * multiplier(for: preference)
+    }
+
+    static func scaledFont(
+        _ style: Font.TextStyle,
+        weight: Font.Weight? = nil,
+        preference: TextSizePreference
+    ) -> Font {
+        let defaultWeight: Font.Weight = style == .headline ? .semibold : .regular
+        return .system(size: pointSize(for: style, preference: preference), weight: weight ?? defaultWeight)
+    }
+
+    private static func appKitTextStyle(for style: Font.TextStyle) -> NSFont.TextStyle {
+        if style == .largeTitle { return .largeTitle }
+        if style == .title { return .title1 }
+        if style == .title2 { return .title2 }
+        if style == .title3 { return .title3 }
+        if style == .headline { return .headline }
+        if style == .subheadline { return .subheadline }
+        if style == .callout { return .callout }
+        if style == .footnote { return .footnote }
+        if style == .caption { return .caption1 }
+        if style == .caption2 { return .caption2 }
+        return .body
+    }
+}
+
+private struct PanelTextSizeKey: EnvironmentKey {
+    static let defaultValue = TextSizePreference.medium
+}
+
+private extension EnvironmentValues {
+    var panelTextSize: TextSizePreference {
+        get { self[PanelTextSizeKey.self] }
+        set { self[PanelTextSizeKey.self] = newValue }
+    }
+}
+
+private struct PanelFontModifier: ViewModifier {
+    @Environment(\.panelTextSize) private var panelTextSize
+    let style: Font.TextStyle
+    let weight: Font.Weight?
+
+    func body(content: Content) -> some View {
+        content.font(PanelFont.scaledFont(style, weight: weight, preference: panelTextSize))
+    }
+}
+
+private extension View {
+    func panelFont(_ style: Font.TextStyle, weight: Font.Weight? = nil) -> some View {
+        modifier(PanelFontModifier(style: style, weight: weight))
     }
 }
 
@@ -180,7 +240,7 @@ struct ContentView: View {
             }
         }
         .padding(16)
-        .dynamicTypeSize(model.persistedState.textSize.dynamicTypeSize)
+        .environment(\.panelTextSize, model.persistedState.textSize)
         .frame(
             width: model.persistedState.textSize.panelWidth,
             height: model.persistedState.textSize.panelHeight
@@ -192,20 +252,18 @@ struct ContentView: View {
     private var listContent: some View {
         VStack(spacing: 10) {
             HStack {
-                Text("BitPrice").font(.title3.bold())
+                Text("BitPrice").panelFont(.title3, weight: .bold)
                 if let presentation = model.aggregatePresentation {
                     Text(presentation.rawValue)
-                        .font(.body.bold())
+                        .panelFont(.body, weight: .bold)
                         .foregroundStyle(color(for: presentation))
                 }
                 Spacer()
-                Button { route = .add } label: { Image(systemName: "plus") }
-                    .font(.title2)
-                    .imageScale(.large)
+                Button { route = .add } label: { Image(systemName: "plus.circle") }
+                    .panelFont(.title2)
                     .disabled(model.isReadOnly || model.items.count >= maximumWatchlistCount)
-                Button { route = .settings } label: { Image(systemName: "gearshape") }
-                    .font(.title2)
-                    .imageScale(.large)
+                Button { route = .settings } label: { Image(systemName: "gearshape.circle") }
+                    .panelFont(.title2)
                     .help("Settings")
             }
             if let recovery = model.recoveryMessage {
@@ -298,18 +356,18 @@ private struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             ZStack {
                 Text("Settings")
-                    .font(.title2.bold())
+                    .panelFont(.title2, weight: .bold)
                 HStack {
                     Button { close() } label: {
                         Label("Back", systemImage: "chevron.left")
                     }
-                    .font(.headline)
+                    .panelFont(.headline)
                     .buttonStyle(.borderless)
                     Spacer()
                     Button("Quit BitPrice", role: .destructive) {
                         NSApplication.shared.terminate(nil)
                     }
-                    .font(.headline)
+                    .panelFont(.headline)
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
                 }
@@ -317,11 +375,11 @@ private struct SettingsView: View {
             .frame(maxWidth: .infinity)
 
             Toggle("Enable price alerts", isOn: alertsBinding)
-                .font(.headline)
+                .panelFont(.headline)
                 .toggleStyle(.switch)
                 .disabled(model.isReadOnly)
             Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
-                .font(.body)
+                .panelFont(.body)
                 .foregroundStyle(.secondary)
 
             Picker("Text size", selection: textSizeBinding) {
@@ -330,15 +388,16 @@ private struct SettingsView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .panelFont(.headline)
 
             Spacer(minLength: 14)
 
             Text("Price updates and alerts stop while the app is closed.")
-                .font(.body)
+                .panelFont(.body)
                 .foregroundStyle(.secondary)
             if let localError {
                 Text(localError)
-                    .font(.body)
+                    .panelFont(.body)
                     .foregroundStyle(.red)
             }
         }
@@ -376,7 +435,7 @@ private struct BannerView: View {
 
     var body: some View {
         Text(text)
-            .font(.body)
+            .panelFont(.body)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(7)
             .background(color.opacity(0.13), in: RoundedRectangle(cornerRadius: 6))
@@ -397,21 +456,20 @@ private struct WatchRow: View {
                     do { try model.setPrimary(item.id) } catch {}
                 } label: {
                     Image(systemName: isPrimary ? "star.fill" : "star")
-                        .font(.title2)
-                        .imageScale(.large)
+                        .panelFont(.title2)
                         .foregroundStyle(isPrimary ? Color.yellow : Color.secondary.opacity(0.45))
                 }
                 .buttonStyle(.borderless)
                 .help(isPrimary ? "Currently shown in the menu bar" : "Show this coin in the menu bar")
                 Text(item.symbol)
-                    .font(.title.bold())
+                    .panelFont(.title, weight: .bold)
                     .lineLimit(1)
                 Text(model.quoteAsset(for: item))
-                    .font(.headline)
+                    .panelFont(.headline)
                     .foregroundStyle(.secondary)
                 if presentation != .live {
                     Text(presentation.rawValue)
-                        .font(.body.bold())
+                        .panelFont(.body, weight: .bold)
                         .foregroundStyle(presentation == .stale ? .orange : .red)
                 }
             }
@@ -419,14 +477,14 @@ private struct WatchRow: View {
 
             if let quote = model.quotes[item.id] {
                 Text(AppModel.formatPrice(quote.price))
-                    .font(.title2.weight(.semibold))
+                    .panelFont(.title2, weight: .semibold)
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .frame(width: 170, alignment: .trailing)
             } else {
                 Text("—")
-                    .font(.title2)
+                    .panelFont(.title2)
                     .foregroundStyle(.secondary)
                     .frame(width: 170, alignment: .trailing)
             }
@@ -434,17 +492,17 @@ private struct WatchRow: View {
             VStack(alignment: .trailing, spacing: 3) {
                 if let quote = model.quotes[item.id] {
                     Text(AppModel.formatChange(quote.change))
-                        .font(.title3)
+                        .panelFont(.title3)
                         .monospacedDigit()
                         .foregroundStyle(changeColor(quote.change))
                 } else {
                     Text("—")
-                        .font(.title3)
+                        .panelFont(.title3)
                         .foregroundStyle(.secondary)
                 }
                 Button(action: editAlert) {
                     Text(model.alertsEnabled ? "Alert" : "Alert · Off")
-                        .font(.headline)
+                        .panelFont(.headline)
                         .foregroundStyle(model.alertsEnabled ? .primary : .secondary)
                         .strikethrough(!model.alertsEnabled)
                 }
@@ -486,31 +544,28 @@ private struct SelectedCoinDetail: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
                 Text("\(item.symbol) details")
-                    .font(.title2.bold())
+                    .panelFont(.title2, weight: .bold)
                 Text(model.quoteAsset(for: item))
-                    .font(.headline)
+                    .panelFont(.headline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button { move(by: -1) } label: {
                     Image(systemName: "chevron.up")
-                        .font(.title2)
-                        .imageScale(.large)
+                        .panelFont(.title2)
                 }
                     .buttonStyle(.borderless)
                     .disabled(itemIndex == 0)
                     .help("Move up")
                 Button { move(by: 1) } label: {
                     Image(systemName: "chevron.down")
-                        .font(.title2)
-                        .imageScale(.large)
+                        .panelFont(.title2)
                 }
                     .buttonStyle(.borderless)
                     .disabled(itemIndex == nil || itemIndex == model.items.count - 1)
                     .help("Move down")
                 Button(role: .destructive, action: remove) {
                     Image(systemName: "trash")
-                        .font(.title2)
-                        .imageScale(.large)
+                        .panelFont(.title2)
                 }
                 .buttonStyle(.borderless)
                 .disabled(model.isReadOnly)
@@ -518,23 +573,23 @@ private struct SelectedCoinDetail: View {
             }
 
             Label("The starred coin is shown in the menu bar.", systemImage: "star.fill")
-                .font(.body)
+                .panelFont(.body)
                 .foregroundStyle(.secondary)
 
             if let chart = model.charts[item.id] {
                 Sparkline(series: chart)
                     .frame(height: 200)
                 Text("24h chart · \(chart.source.rawValue.capitalized)/\(chart.quoteAsset)")
-                    .font(.body)
+                    .panelFont(.body)
                     .foregroundStyle(.secondary)
                 if chart.latestRefreshFailed {
                     Text("Refresh failed; showing the last available chart.")
-                        .font(.body)
+                        .panelFont(.body)
                         .foregroundStyle(.orange)
                 }
             } else {
                 Label("24h chart unavailable", systemImage: "chart.xyaxis.line")
-                    .font(.body)
+                    .panelFont(.body)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 200)
             }
@@ -553,7 +608,7 @@ private struct SelectedCoinDetail: View {
             if let id = item.binanceMapping?.productID { Text("BN: \(id)") }
             if let id = item.coinbaseMapping?.productID { Text("CB: \(id)") }
         }
-        .font(.body)
+        .panelFont(.body)
         .foregroundStyle(.secondary)
         .textSelection(.enabled)
     }
@@ -575,6 +630,7 @@ private struct SelectedCoinDetail: View {
 
 private struct Sparkline: View {
     let series: ChartSeries
+    @Environment(\.panelTextSize) private var panelTextSize
 
     var body: some View {
         Canvas { context, size in
@@ -639,7 +695,7 @@ private struct Sparkline: View {
 
             let label = context.resolve(
                 Text(ChartAxisCalculator.formattedPrice(tick, fractionDigits: pricePrecision))
-                    .font(.body)
+                    .font(PanelFont.scaledFont(.body, preference: panelTextSize))
                     .foregroundColor(.secondary)
             )
             context.draw(label, at: CGPoint(x: plotRect.minX - 9, y: y), anchor: .trailing)
@@ -660,7 +716,7 @@ private struct Sparkline: View {
 
             let label = context.resolve(
                 Text(tick.formatted(date: .omitted, time: .shortened))
-                    .font(.body)
+                    .font(PanelFont.scaledFont(.body, preference: panelTextSize))
                     .foregroundColor(.secondary)
             )
             let anchor: UnitPoint
@@ -723,16 +779,17 @@ private struct AddCoinView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(project == nil ? "Add coin" : "Confirm markets").font(.title2.bold())
+                Text(project == nil ? "Add coin" : "Confirm markets")
+                    .panelFont(.title2, weight: .bold)
                 Spacer()
                 Button("Cancel", action: close)
-                    .font(.headline)
+                    .panelFont(.headline)
             }
             if let project {
                 confirmation(project)
             } else {
                 TextField("Search CoinGecko", text: $searchText)
-                    .font(.title3)
+                    .panelFont(.title3)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: searchText) { _, value in model.search(query: value) }
                 List(model.searchResults) { result in
@@ -741,15 +798,15 @@ private struct AddCoinView: View {
                     } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 12) {
                             Text(result.symbol)
-                                .font(.title2.bold())
+                                .panelFont(.title2, weight: .bold)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                                 .frame(width: 140, alignment: .leading)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(result.name)
-                                    .font(.headline)
+                                    .panelFont(.headline)
                                 Text(result.id)
-                                    .font(.body)
+                                    .panelFont(.body)
                                     .foregroundStyle(.secondary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -762,7 +819,7 @@ private struct AddCoinView: View {
                 }
                 .listStyle(.plain)
             }
-            if let localError { Text(localError).font(.body).foregroundStyle(.red) }
+            if let localError { Text(localError).panelFont(.body).foregroundStyle(.red) }
         }
     }
 
@@ -771,16 +828,16 @@ private struct AddCoinView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Label("Candidates matched by ticker; verify the market.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.headline)
+                    .panelFont(.headline)
                     .foregroundStyle(.orange)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(result.symbol)
-                        .font(.title2.bold())
+                        .panelFont(.title2, weight: .bold)
                     Text("\(result.name) · \(result.id)")
-                        .font(.headline)
+                        .panelFont(.headline)
                         .foregroundStyle(.secondary)
                 }
                 if loadingCandidates {
@@ -789,7 +846,7 @@ private struct AddCoinView: View {
                     candidatePicker(title: "Binance / USDT", candidates: binanceCandidates, selection: $selectedBinance)
                     candidatePicker(title: "Coinbase / USD", candidates: coinbaseCandidates, selection: $selectedCoinbase)
                     Text("Coinbase polling is every 60 seconds and can miss a brief alert breach.")
-                        .font(.body)
+                        .panelFont(.body)
                         .foregroundStyle(.secondary)
                     HStack(spacing: 12) {
                         Button("Back") { project = nil }
@@ -812,7 +869,7 @@ private struct AddCoinView: View {
     private func candidatePicker(title: String, candidates: [VenueCandidate], selection: Binding<String?>) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.title3.bold())
+                .panelFont(.title3, weight: .bold)
                 .padding(.bottom, 4)
             candidateRow(label: "No market", value: "__none__", selection: selection)
             ForEach(candidates) { candidate in
@@ -824,7 +881,7 @@ private struct AddCoinView: View {
             }
             if candidates.isEmpty {
                 Text("No ticker-matched candidates.")
-                    .font(.body)
+                    .panelFont(.body)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 7)
             }
@@ -840,7 +897,7 @@ private struct AddCoinView: View {
                     .foregroundStyle(selection.wrappedValue == value ? Color.accentColor : .secondary)
                     .frame(width: 20, alignment: .center)
                 Text(label)
-                    .font(.headline)
+                    .panelFont(.headline)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer()
@@ -919,14 +976,14 @@ private struct AlertEditorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Alert · \(item.symbol)").font(.title2.bold())
+                Text("Alert · \(item.symbol)").panelFont(.title2, weight: .bold)
                 Spacer()
                 Button("Cancel", action: close)
             }
             Toggle("Enabled", isOn: $enabled)
             if !model.alertsEnabled {
                 Text("Alerts are globally off. This alert will not fire until they are re-enabled.")
-                    .font(.body)
+                    .panelFont(.body)
                     .foregroundStyle(.orange)
             }
             // Segmented style renders inline; a menu-style Picker would take key
@@ -942,11 +999,11 @@ private struct AlertEditorView: View {
             rearmExplanation
             if let alert = item.alert, alert.isEnabled, !alert.isArmed {
                 Text("Currently disarmed — it already fired and is waiting for the re-arm price above.")
-                    .font(.body).foregroundStyle(.orange)
+                    .panelFont(.body).foregroundStyle(.orange)
             }
             Text("Coinbase polls every 60 seconds and can miss a brief breach.")
-                .font(.body).foregroundStyle(.secondary)
-            if let localError { Text(localError).font(.body).foregroundStyle(.red) }
+                .panelFont(.body).foregroundStyle(.secondary)
+            if let localError { Text(localError).panelFont(.body).foregroundStyle(.red) }
             Spacer()
             HStack {
                 Button("Remove alert") { remove() }
@@ -957,7 +1014,7 @@ private struct AlertEditorView: View {
                 Button("Save") { save() }
             }
         }
-        .font(.headline)
+        .panelFont(.headline)
     }
 
     /// Spells out the re-arm price.
@@ -986,7 +1043,7 @@ private struct AlertEditorView: View {
                     Text("Hysteresis 0 re-arms as soon as the price crosses back; cooldown alone limits repeats.")
                 }
             }
-            .font(.body)
+            .panelFont(.body)
             .foregroundStyle(.secondary)
         }
     }
