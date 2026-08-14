@@ -142,3 +142,15 @@
 - Both cards remain the same title/control/explanation `VStack`; no title-trailing switch exception was introduced.
 - Verification passed: 32 tests with 0 failures and 2 expected skips; strict app build; plist/signing/linkage/icon checks; `git diff --check`; forbidden API/font audits; and direct inspection of the two card blocks.
 - No Aqua GUI session exists. A human desktop check must confirm the cards read cleanly with one visible name each and that the hidden labels are presented appropriately by VoiceOver.
+
+## UI10: detail supporting-text trim
+- The selected-detail star hint is redundant because the row star retains its state-specific `.help(...)` descriptions. Removing only the detail `Label` avoids repeating a general rule inside every selected coin block.
+- Mapping summaries retain `CG:`, `BN:`, and `CB:` prefixes and render missing venue mappings as `BN: none` or `CB: none`, so a shortened line cannot imply that one venue's ID belongs to another.
+- The summary is a view-local computed property rather than an extracted pure function. The rendered `Text` is single-line, tail-truncated, selectable, and carries the complete summary in `.help(...)` for long CoinGecko IDs.
+- Chart source/quote disclosure, stale-chart messaging, and reorder/delete controls are unchanged.
+
+### UI10 implementation tradeoffs and verification
+- `BN: none` and `CB: none` are explicit absence markers, not fabricated market IDs. The `CG:`, `BN:`, and `CB:` prefixes remain inline so every present ID is recoverable by venue.
+- The line truncates as a whole to protect the fixed panel width; `.help(mappingSummary)` retains the complete string for long identifiers.
+- Verification passed: 32 tests with 0 failures and 2 expected skips; strict app build; plist/signing/linkage/icon checks; `git diff --check`; forbidden API/font audits; and direct preservation checks for row help, chart disclosures, stale messaging, and detail controls.
+- No Aqua GUI session exists. A human desktop check must confirm the one-line mapping summary and long-ID tooltip are comfortable in the actual panel.

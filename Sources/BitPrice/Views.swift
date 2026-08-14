@@ -595,10 +595,6 @@ private struct SelectedCoinDetail: View {
                 .help("Remove \(item.symbol)")
             }
 
-            Label("The starred coin is shown in the menu bar.", systemImage: "star.fill")
-                .panelFont(.body)
-                .foregroundStyle(.secondary)
-
             if let chart = model.charts[item.id] {
                 Sparkline(series: chart)
                     .frame(height: 200)
@@ -626,14 +622,19 @@ private struct SelectedCoinDetail: View {
     }
 
     private var mappingDetails: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("CG: \(item.coinGeckoID)")
-            if let id = item.binanceMapping?.productID { Text("BN: \(id)") }
-            if let id = item.coinbaseMapping?.productID { Text("CB: \(id)") }
-        }
-        .panelFont(.body)
-        .foregroundStyle(.secondary)
-        .textSelection(.enabled)
+        Text(mappingSummary)
+            .panelFont(.body)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .help(mappingSummary)
+            .textSelection(.enabled)
+    }
+
+    private var mappingSummary: String {
+        let binance = item.binanceMapping.map { "BN: \($0.productID)" } ?? "BN: none"
+        let coinbase = item.coinbaseMapping.map { "CB: \($0.productID)" } ?? "CB: none"
+        return ["CG: \(item.coinGeckoID)", binance, coinbase].joined(separator: " · ")
     }
 
     private func move(by offset: Int) {

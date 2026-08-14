@@ -4,7 +4,7 @@
 Implement the app icon, textual menu-bar price, larger typography, compact selectable rows, and a bottom chart/detail area without changing non-UI behavior or concurrency contracts.
 
 ## Current phase
-Complete
+UI10 in progress
 
 ### Phase 13: Implement macOS font scaling and header icon alignment
 - [x] Read the current UI6 sources and restore planning context
@@ -78,6 +78,25 @@ Complete
 - The two Settings cards now show one visible setting name each through bold primary headings; Toggle and Picker labels are hidden visually but retain explicit accessibility names.
 - UI8 card structure, spacing, explanations, header, footer/error lines, bindings, read-only behavior, and shared frame remain unchanged.
 - Strict build, existing tests, bundle checks, and source-policy audits passed. No Aqua GUI session was available for visual confirmation.
+
+### Phase 21: Implement detail supporting-text trim
+- [x] Read current SelectedCoinDetail and repository verification context
+- [x] Remove the redundant starred-coin hint while preserving row help text
+- [x] Condense mapping IDs into one selectable, truncated line with prefixes, absence markers, and full-text help
+- **Status:** complete
+
+### Phase 22: Verify and record UI10
+- [x] Run strict build, full tests, bundle checks, and source-policy audits
+- [x] Inspect preservation of chart/stale disclosures and reorder/delete controls
+- [x] Record the mapping-summary and no-Aqua limitations
+- [x] Write `.codex-implement/_codex_impl_summary_ui10.md`
+- **Status:** complete
+
+## UI10 completion
+- Selected detail now has no repeated starred-coin hint, while row star help text remains intact.
+- Mapping IDs are one selectable, tail-truncated, venue-prefixed line with explicit absent-mapping markers and full-text help.
+- Strict build, existing tests, bundle checks, and source-policy audits passed. No Aqua GUI session was available for visual confirmation.
+
 
 ### Phase 11: Implement Settings layout, text-size preference, and icon scaling
 - [x] Read the current UI5 sources, planning records, tests, and build scripts

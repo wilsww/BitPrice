@@ -255,3 +255,29 @@
 - Final added-line audit found none of `sheet(`, `popover(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, `Form {`, or `.system(size:`; `NotificationService.swift` is unchanged.
 - No app launch or visual verification was attempted because this host has no Aqua GUI session. A desktop check remains necessary to confirm visual hierarchy and VoiceOver presentation in the real panel.
 - Wrote `.codex-implement/_codex_impl_summary_ui9.md`.
+
+## UI10 session: 2026-08-14
+
+### Phase 21: Inspect detail supporting text
+- **Status:** in_progress
+- Read the planning skill, current `.planning/ui/` records, requested source context, and `SelectedCoinDetail`.
+- Confirmed the starred-coin hint is redundant and the row star already retains state-specific `.help(...)` text.
+- Confirmed mapping IDs are currently three stacked conditional lines. The replacement will be a view-local computed summary, not a standalone pure function, so no new mapping unit test is needed.
+- The first summary-file patch used an update operation before the required file existed; no repository content was changed by that failed patch, and the summary was then added explicitly.
+
+### Phase 21: Implement detail supporting-text trim
+- **Status:** complete
+- Removed only the selected-detail starred-coin hint; preserved the row star's state-specific `.help(...)` text.
+- Replaced stacked conditional mapping rows with a single `Text` line containing all three short venue prefixes and `none` markers for absent Binance/Coinbase mappings.
+- Kept the summary selectable, tail-truncated it to one line, and attached the complete untruncated string to `.help(...)`.
+- Left chart source/quote disclosure, stale-refresh messaging, and reorder/delete controls unchanged.
+- No standalone pure formatter or new mapping test was added; formatting remains a view-local computed property.
+
+### Phase 22: Verify and record UI10
+- **Status:** complete
+- Final `bash scripts/run-tests.sh`: 32 passed, 0 failed, 2 expected no-Aqua skips.
+- Final `bash scripts/build-app.sh`: passed under strict Swift 6 warnings-as-errors; plist lint, codesign verification, `otool -L`, and `Contents/Resources/AppIcon.icns` checks passed.
+- Final inspection confirmed preserved row-star help, chart/stale disclosures, reorder/delete controls, text selection, mapping prefixes, absence markers, and full-text help.
+- Final added-line audit found none of `sheet(`, `popover(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, `Form {`, or `.system(size:`; `NotificationService.swift` is unchanged.
+- No app launch or visual verification was attempted because this host has no Aqua GUI session. A desktop check remains necessary for long-ID truncation and tooltip/readability behavior.
+- Wrote `.codex-implement/_codex_impl_summary_ui10.md`.
