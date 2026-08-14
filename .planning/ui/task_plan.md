@@ -321,3 +321,8 @@ Complete
 | macOS 15.6 `iconutil -c icns` rejects complete valid-size iconsets, including one it extracted from Apple's Dock icon | 2 | Keep the required pack attempt, then fall back to a deterministic ICNS container; validate by decoding it with `iconutil -c iconset`. |
 | A diagnostic command containing `rm -rf build/IconDebug.iconset` was rejected by the execution safety layer | 1 | Used a uniquely named `mktemp` debug directory instead; no project data was removed. |
 | A combined patch expected a duplicated chart-call line that was only an output-display artifact | 1 | Re-read the exact source range and applied the source/test edits against the actual text. |
+
+## UI15 completion
+- The baseline is marked by a compact filled diamond and shared-precision value; its tooltip preserves the lost explanatory words without widening the axis or adding an in-plot label.
+- Settings identity now has intrinsic height and sits directly above the closing disclosure, with the existing flexible spacer above and negative layout priority preserved.
+- Strict tests/build and source-scope audits passed. Desktop visual confirmation remains outstanding because the host has no Aqua GUI session.

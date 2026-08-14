@@ -184,3 +184,8 @@
 - Ordinary ticks are suppressed only when their plotted distance from the baseline is less than the body-font point size used as an approximate one-line separation. The baseline wins even at the true minimum or maximum, so a coincident bound tick is replaced rather than nudged; the opposite bound follows the same rule when it collides.
 - The dashed baseline is painted after ordinary gridlines but before the per-segment fill and stroke. No floating in-plot label remains, and true min/max bounds and gap-safe fill are unchanged.
 - Settings reads `NSApplication.shared.applicationIconImage` and bundle metadata at runtime. The icon block is centered, scales its modest image dimension with the text preference, and has low layout priority so the cards and closing disclosure remain primary if vertical space is scarce.
+
+## UI15: compact baseline marker and bottom-pinned Settings identity
+- The baseline axis label now uses a filled diamond followed by the same rounded value as ordinary ticks. Bold weight and the distinct baseline color remain; the Y-axis reserve returns to the ordinary-label scale rather than being widened for explanatory words.
+- The diamond alone tells an axis-only reader that this is a specially marked reference value, but not that it is the 24-hour opening close. A `.help(...)` on the chart supplies that meaning without affecting layout width, and no floating in-plot label was reintroduced.
+- The Settings identity block now has intrinsic height and remains directly above the closing disclosure. The existing spacer owns the flexible space above it, while `.layoutPriority(-1)` remains so decoration yields to real content at Extra Large.

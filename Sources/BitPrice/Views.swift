@@ -533,7 +533,7 @@ private struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
         .layoutPriority(-1)
     }
 
@@ -824,10 +824,7 @@ private struct Sparkline: View {
                   let start = timeTicks.first,
                   let end = timeTicks.last else { return }
 
-            let yAxisWidth = max(
-                108,
-                132 * PanelFont.multiplier(for: panelTextSize)
-            )
+            let yAxisWidth = max(108, 108 * PanelFont.multiplier(for: panelTextSize))
             let plotRect = CGRect(
                 x: yAxisWidth,
                 y: 14,
@@ -875,6 +872,7 @@ private struct Sparkline: View {
             )
         }
         .opacity(series.latestRefreshFailed ? 0.45 : 1)
+        .help("The diamond marks this chart series' opening close.")
     }
 
     private func drawAxes(
@@ -901,7 +899,7 @@ private struct Sparkline: View {
 
             let tickText = ChartAxisCalculator.formattedPrice(tick.value, fractionDigits: pricePrecision)
             let label = context.resolve(
-                Text(tick.isBaseline ? "24h open \(tickText)" : tickText)
+                Text(tick.isBaseline ? "◆ \(tickText)" : tickText)
                     .font(
                         PanelFont.scaledFont(
                             .body,

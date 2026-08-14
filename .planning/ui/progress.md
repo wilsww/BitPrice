@@ -390,3 +390,18 @@
 - Added the running app icon via `Image(nsImage: NSApplication.shared.applicationIconImage)` and conditional bundle-derived name/version text above the existing closing disclosure. The flexible low-priority block gives way before the real Settings content.
 - Re-ran the direct Swift 6 test/build paths after correcting the labeled `PanelFont.pointSize(for:)` call and giving a neutral zero-change baseline the accent color. Tests passed 32/32 with the two expected no-Aqua skips; the strict app build passed with plist, signing, linkage, and icon checks.
 - No Aqua session was available. Desktop review remains necessary for axis-label width/readability at Extra Large, baseline color/line relationship, and the final Settings icon block balance.
+
+## UI15 session: 2026-08-15
+
+### Phase 33: Compact the baseline marker and sink Settings identity
+- **Status:** complete
+- Read the current `Views.swift`, domain/test/build context, and the existing planning records before editing.
+- Replaced the words in the baseline axis label with a filled diamond plus the unchanged shared-precision value. Restored the Y-axis reserve to the ordinary-label width scale and added a tooltip describing the diamond as this chart series' opening close.
+- Removed only the app identity block's infinite-height frame. Its runtime icon, bundle-derived metadata, scaled image dimensions, negative layout priority, and position immediately above the closing disclosure remain unchanged.
+
+### Phase 34: Verify and record UI15
+- **Status:** complete
+- `bash scripts/run-tests.sh`: 32 passed, 0 failed, 2 expected no-Aqua skips; the axis test count and tick-value assertions were unchanged.
+- `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, `otool -L`, and bundled icon checks.
+- Forbidden-API/font and scope audits passed. No bundle version keys, tests, icon generator, or non-target source files were changed.
+- No Aqua GUI session was available; desktop review remains necessary for the diamond's glyph rendering, axis spacing at each text size, and bottom-pinning/overflow appearance.
