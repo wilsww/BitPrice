@@ -29,6 +29,13 @@ enum AlertDirection: String, Codable, Sendable {
     case below
 }
 
+enum TextSizePreference: String, Codable, CaseIterable, Hashable, Sendable {
+    case small
+    case medium
+    case large
+    case extraLarge
+}
+
 struct PriceAlert: Codable, Equatable, Sendable {
     var direction: AlertDirection
     var threshold: Decimal
@@ -54,6 +61,7 @@ struct PersistedState: Codable, Equatable, Sendable {
     var items: [WatchItem]
     var primaryItemID: UUID?
     var alertsEnabled: Bool = true
+    var textSize: TextSizePreference = .medium
 
     static func bitcoinSeed(id: UUID = UUID()) -> PersistedState {
         let binance = VenueMapping(
@@ -83,7 +91,8 @@ struct PersistedState: Codable, Equatable, Sendable {
             schemaVersion: currentSchemaVersion,
             items: [item],
             primaryItemID: id,
-            alertsEnabled: true
+            alertsEnabled: true,
+            textSize: .medium
         )
     }
 }

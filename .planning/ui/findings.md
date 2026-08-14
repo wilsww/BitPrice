@@ -79,3 +79,18 @@
 - The global toggle uses the existing synchronous full-state edit path, so it gets the same durable-write and read-only protection as other settings without changing any feed or task lifecycle code. Turning it on only changes the next quote evaluation; it does not re-arm or add a grace period.
 - Verification passed: `bash scripts/build-app.sh`; `bash scripts/run-tests.sh` (28 passed, 0 failed, 2 expected skips); `plutil -lint`; `codesign --verify`; `otool -L`; icon resource presence; `git diff --check`; and added-line forbidden-API/concurrency/build audits.
 - No Aqua GUI session exists on this host. A human desktop check is still needed for actual panel appearance, Settings/Done/Quit interaction, off-state contrast, row/editor text fit, axis label placement/localization, and menu-bar/panel behavior.
+
+## UI5: Settings layout, text-size preference, and larger icons
+- UI4 currently renders Settings inline through `PanelRoute.settings`; its header is a leading title plus trailing Done, the quit action is in the body, and the alert toggle has no explicit style. UI5 can preserve the route and immediately-applying binding while changing only presentation/layout.
+- `ContentView` owns the fixed `.frame(width: 660, height: 780)`. The text-size preference must be applied to this root view and choose the frame dimensions from a stable enum/string preference without changing any model/network lifecycle code.
+- `PersistedState` and `V1StateDTO` already carry the v1 root `alertsEnabled` flag. The new preference belongs alongside it, with manual DTO decode fallback for absent and unrecognized strings; `currentSchemaVersion` and `validatePersistedState` stay unchanged.
+- `AppModel.commitEdit` is already public and synchronous on the main actor, so Settings can persist the text-size enum through an inline binding without modifying `AppModel.swift` or adding another runtime/concurrency surface.
+- Requested glyphs are the row star, list header plus/gear, and detail up/down/trash images. Their current fonts are `.title3` or implicit, so `.imageScale(.large)` and Dynamic Type-relative font styles are appropriate; no fixed point size or `.system(size:)` is needed.
+
+### UI5 implementation tradeoffs and verification
+- `TextSizePreference` uses the stable raw strings `small`, `medium`, `large`, and `extraLarge`. The DTO canonicalizes both absent and unrecognized values to `medium`, and always writes the canonical root field without changing schema v1.
+- The four requested panel sizes are used exactly: 560×700, 660×780, 760×880, and 860×980. The `dynamicTypeSize` mapping uses SwiftUI `.small`, `.medium`, `.large`, and `.xLarge`; the existing semantic font styles remain intact.
+- The Settings header uses a full-width ZStack so the title is geometrically centered despite the Back and destructive Quit controls having different widths. The segmented text-size picker stays inline and does not risk dismissing the `.window` panel.
+- The preference is persisted through the existing synchronous `commitEdit` path from `Views.swift`; no `AppModel.swift` change was needed, and no feed/network lifecycle behavior was added.
+- Verification passed: strict app build; plist lint; codesign verification; `otool -L`; icon presence; 30 tests with 0 failures and 2 expected no-Aqua skips; `git diff --check`; and added-line audits for forbidden presentations, menu shortcuts, fixed system font sizes, concurrency workarounds, and SwiftPM.
+- No Aqua GUI session exists on this host. A human desktop check is still needed for actual header centering, switch/segmented-control appearance, panel resizing at all four steps, longest-row fit, and larger glyph balance.

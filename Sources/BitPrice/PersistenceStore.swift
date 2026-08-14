@@ -72,19 +72,28 @@ struct V1StateDTO: Codable, Equatable, Sendable {
     let items: [V1ItemDTO]
     let primaryItemID: UUID?
     let alertsEnabled: Bool
+    let textSize: String
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion
         case items
         case primaryItemID
         case alertsEnabled
+        case textSize
     }
 
-    init(schemaVersion: Int, items: [V1ItemDTO], primaryItemID: UUID?, alertsEnabled: Bool = true) {
+    init(
+        schemaVersion: Int,
+        items: [V1ItemDTO],
+        primaryItemID: UUID?,
+        alertsEnabled: Bool = true,
+        textSize: String = TextSizePreference.medium.rawValue
+    ) {
         self.schemaVersion = schemaVersion
         self.items = items
         self.primaryItemID = primaryItemID
         self.alertsEnabled = alertsEnabled
+        self.textSize = TextSizePreference(rawValue: textSize)?.rawValue ?? TextSizePreference.medium.rawValue
     }
 
     init(from decoder: any Decoder) throws {
@@ -93,6 +102,9 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         items = try container.decode([V1ItemDTO].self, forKey: .items)
         primaryItemID = try container.decodeIfPresent(UUID.self, forKey: .primaryItemID)
         alertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .alertsEnabled) ?? true
+        let decodedTextSize = try container.decodeIfPresent(String.self, forKey: .textSize)
+            ?? TextSizePreference.medium.rawValue
+        textSize = TextSizePreference(rawValue: decodedTextSize)?.rawValue ?? TextSizePreference.medium.rawValue
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -105,6 +117,7 @@ struct V1StateDTO: Codable, Equatable, Sendable {
             try container.encodeNil(forKey: .primaryItemID)
         }
         try container.encode(alertsEnabled, forKey: .alertsEnabled)
+        try container.encode(textSize, forKey: .textSize)
     }
 }
 
@@ -133,7 +146,8 @@ func migrateV0ToV1(_ old: V0StateDTO) -> V1StateDTO {
             )
         },
         primaryItemID: old.primaryItemID,
-        alertsEnabled: true
+        alertsEnabled: true,
+        textSize: TextSizePreference.medium.rawValue
     )
 }
 
@@ -282,7 +296,8 @@ final class PersistenceStore {
                 )
             },
             primaryItemID: state.primaryItemID,
-            alertsEnabled: state.alertsEnabled
+            alertsEnabled: state.alertsEnabled,
+            textSize: state.textSize.rawValue
         )
     }
 
@@ -316,7 +331,8 @@ final class PersistenceStore {
                 )
             },
             primaryItemID: dto.primaryItemID,
-            alertsEnabled: dto.alertsEnabled
+            alertsEnabled: dto.alertsEnabled,
+            textSize: TextSizePreference(rawValue: dto.textSize) ?? .medium
         )
     }
 

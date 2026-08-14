@@ -135,3 +135,28 @@
 - Final `bash scripts/run-tests.sh`: 28 passed, 0 failed, 2 expected no-Aqua skips.
 - No app launch or visual verification was attempted because the host has no Aqua GUI session.
 - Wrote `.codex-implement/_codex_impl_summary_ui4.md`.
+
+## UI5 session: 2026-08-14
+
+### Phase 11: Inspect requirements and current implementation
+- **Status:** in_progress
+- Restored the existing `.planning/ui/` records and ran the planning session catch-up script.
+- Confirmed UI4 is present: inline Settings, root `alertsEnabled`, v1 manual DTO decode/encode, fixed 660×780 panel, and existing Dynamic Type styles.
+- Confirmed the new preference can use `AppModel.commitEdit` from `Views.swift`, keeping the requested source scope and avoiding networking/concurrency changes.
+
+### Phase 11: Implement Settings layout, text-size preference, and icon scaling
+- **Status:** complete
+- Added `TextSizePreference` to the v1 persisted domain and manually decoded/encoded/canonicalized it in `V1StateDTO`; v0 migration remains default medium.
+- Added the root dynamic type modifier and preference-specific 560×700, 660×780, 760×880, and 860×980 panel frames.
+- Reworked Settings to a centered full-width header with Back on the left and immediate destructive Quit on the right; changed alerts to a switch and added an inline segmented text-size control.
+- Enlarged the header plus/gear, row star, and detail reorder/delete glyphs with Dynamic Type fonts and `.imageScale(.large)`.
+- Added persistence tests for absent text-size defaulting, unrecognized-value fallback, and extra-large round trip.
+
+### Phase 12: Verify and record UI5
+- **Status:** complete
+- `bash scripts/build-app.sh` exited 0 under strict Swift 6 warnings-as-errors; plist lint, ad-hoc signing verification, and `otool -L` passed.
+- `Contents/Resources/AppIcon.icns` remains present. `NotificationService.swift` and `AppModel.swift` are unchanged.
+- Final `bash scripts/run-tests.sh`: 30 passed, 0 failed, 2 expected no-Aqua skips.
+- Added-line grep found none of `sheet(`, `popover(`, `alert(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, or `.system(size:`; no forbidden concurrency/build additions were found.
+- No app launch or visual verification was attempted because the host has no Aqua GUI session.
+- Wrote `.codex-implement/_codex_impl_summary_ui5.md`.

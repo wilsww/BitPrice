@@ -6,6 +6,32 @@ Implement the app icon, textual menu-bar price, larger typography, compact selec
 ## Current phase
 Complete
 
+### Phase 11: Implement Settings layout, text-size preference, and icon scaling
+- [x] Read the current UI5 sources, planning records, tests, and build scripts
+- [x] Add persisted stable text-size preference with default-medium fallback
+- [x] Apply root dynamic type and preference-sized panel; revise Settings header and switch
+- [x] Scale requested glyphs with Dynamic Type and add focused persistence tests
+- **Status:** complete
+
+### Phase 11 verification checkpoint
+- `bash scripts/run-tests.sh`: 30 passed, 0 failed, 2 expected no-Aqua skips.
+- `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors and bundle verification.
+
+### Phase 12: Verify and record UI5
+- [x] Run strict app build, bundle checks, full tests, and forbidden-API audits
+- [x] Review schema/network/concurrency scope and preserve NotificationService
+- [x] Record tradeoffs and no-Aqua limitations in `.planning/ui/`
+- [x] Write `.codex-implement/_codex_impl_summary_ui5.md`
+- **Status:** complete
+
+## UI5 completion
+- The text-size preference is a stable string with canonical medium fallback; schema version remains 1.
+- The requested four panel dimensions are used exactly, and the centered Settings title is isolated from unequal control widths with a full-width ZStack.
+- No Aqua visual verification was possible.
+
+## Current phase
+Complete
+
 ## Phases
 
 ### Phase 1: Inspect requirements and implementation

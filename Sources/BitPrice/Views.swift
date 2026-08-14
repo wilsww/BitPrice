@@ -19,6 +19,44 @@ struct ChartPriceBounds: Equatable {
     let maximum: Decimal
 }
 
+private extension TextSizePreference {
+    var dynamicTypeSize: DynamicTypeSize {
+        switch self {
+        case .small: .small
+        case .medium: .medium
+        case .large: .large
+        case .extraLarge: .xLarge
+        }
+    }
+
+    var panelWidth: CGFloat {
+        switch self {
+        case .small: 560
+        case .medium: 660
+        case .large: 760
+        case .extraLarge: 860
+        }
+    }
+
+    var panelHeight: CGFloat {
+        switch self {
+        case .small: 700
+        case .medium: 780
+        case .large: 880
+        case .extraLarge: 980
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .small: "Small"
+        case .medium: "Medium"
+        case .large: "Large"
+        case .extraLarge: "Extra Large"
+        }
+    }
+}
+
 /// Presentation-only axis values derived from the chart points themselves.
 ///
 /// Keeping this calculation separate from drawing makes the flat and sparse
@@ -142,7 +180,11 @@ struct ContentView: View {
             }
         }
         .padding(16)
-        .frame(width: 660, height: 780)
+        .dynamicTypeSize(model.persistedState.textSize.dynamicTypeSize)
+        .frame(
+            width: model.persistedState.textSize.panelWidth,
+            height: model.persistedState.textSize.panelHeight
+        )
         .onAppear { reconcileSelection() }
         .onChange(of: model.items.map(\.id)) { _, _ in reconcileSelection() }
     }
@@ -158,10 +200,12 @@ struct ContentView: View {
                 }
                 Spacer()
                 Button { route = .add } label: { Image(systemName: "plus") }
-                    .font(.title3)
+                    .font(.title2)
+                    .imageScale(.large)
                     .disabled(model.isReadOnly || model.items.count >= maximumWatchlistCount)
                 Button { route = .settings } label: { Image(systemName: "gearshape") }
-                    .font(.title3)
+                    .font(.title2)
+                    .imageScale(.large)
                     .help("Settings")
             }
             if let recovery = model.recoveryMessage {
@@ -252,28 +296,43 @@ private struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
+            ZStack {
                 Text("Settings")
                     .font(.title2.bold())
-                Spacer()
-                Button("Done", action: close)
+                HStack {
+                    Button { close() } label: {
+                        Label("Back", systemImage: "chevron.left")
+                    }
                     .font(.headline)
+                    .buttonStyle(.borderless)
+                    Spacer()
+                    Button("Quit BitPrice", role: .destructive) {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    .font(.headline)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                }
             }
+            .frame(maxWidth: .infinity)
 
             Toggle("Enable price alerts", isOn: alertsBinding)
                 .font(.headline)
+                .toggleStyle(.switch)
                 .disabled(model.isReadOnly)
             Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
                 .font(.body)
                 .foregroundStyle(.secondary)
 
+            Picker("Text size", selection: textSizeBinding) {
+                ForEach(TextSizePreference.allCases, id: \.self) { preference in
+                    Text(preference.displayName).tag(preference)
+                }
+            }
+            .pickerStyle(.segmented)
+
             Spacer(minLength: 14)
 
-            Button("Quit BitPrice", role: .destructive) {
-                NSApplication.shared.terminate(nil)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
             Text("Price updates and alerts stop while the app is closed.")
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -292,6 +351,20 @@ private struct SettingsView: View {
             set: { enabled in
                 do { try model.setAlertsEnabled(enabled) }
                 catch { localError = error.localizedDescription }
+            }
+        )
+    }
+
+    private var textSizeBinding: Binding<TextSizePreference> {
+        Binding(
+            get: { model.persistedState.textSize },
+            set: { preference in
+                do {
+                    try model.commitEdit { draft in draft.textSize = preference }
+                    localError = nil
+                } catch {
+                    localError = error.localizedDescription
+                }
             }
         )
     }
@@ -324,7 +397,8 @@ private struct WatchRow: View {
                     do { try model.setPrimary(item.id) } catch {}
                 } label: {
                     Image(systemName: isPrimary ? "star.fill" : "star")
-                        .font(.title3)
+                        .font(.title2)
+                        .imageScale(.large)
                         .foregroundStyle(isPrimary ? Color.yellow : Color.secondary.opacity(0.45))
                 }
                 .buttonStyle(.borderless)
@@ -417,16 +491,26 @@ private struct SelectedCoinDetail: View {
                     .font(.headline)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button { move(by: -1) } label: { Image(systemName: "chevron.up") }
+                Button { move(by: -1) } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.title2)
+                        .imageScale(.large)
+                }
                     .buttonStyle(.borderless)
                     .disabled(itemIndex == 0)
                     .help("Move up")
-                Button { move(by: 1) } label: { Image(systemName: "chevron.down") }
+                Button { move(by: 1) } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.title2)
+                        .imageScale(.large)
+                }
                     .buttonStyle(.borderless)
                     .disabled(itemIndex == nil || itemIndex == model.items.count - 1)
                     .help("Move down")
                 Button(role: .destructive, action: remove) {
                     Image(systemName: "trash")
+                        .font(.title2)
+                        .imageScale(.large)
                 }
                 .buttonStyle(.borderless)
                 .disabled(model.isReadOnly)

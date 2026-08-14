@@ -290,6 +290,7 @@ struct BitPriceTests {
                     throw TestFailure(description: "v1 fixture was not a JSON object")
                 }
                 object.removeValue(forKey: "alertsEnabled")
+                object.removeValue(forKey: "textSize")
                 let legacyV1 = try JSONSerialization.data(withJSONObject: object)
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
@@ -299,10 +300,41 @@ struct BitPriceTests {
                     throw TestFailure(description: "v1 without alertsEnabled entered recovery")
                 }
                 try expect(state.alertsEnabled, "absent alertsEnabled did not default to on")
+                try expect(state.textSize == .medium, "absent textSize did not default to medium")
                 try expect(!store.recoveryProtected, "valid v1 without alertsEnabled was protected")
                 let encoded = try store.encodedData(for: state)
                 let encodedObject = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
                 try expect(encodedObject?["alertsEnabled"] as? Bool == true, "alertsEnabled was not encoded")
+                try expect(encodedObject?["textSize"] as? String == "medium", "textSize was not encoded")
+            },
+            AcceptanceTest(name: "06c unrecognized text size defaults without recovery") {
+                let fixture = try Data(contentsOf: URL(fileURLWithPath: "Tests/Fixtures/watchlist-v1.json"))
+                guard var object = try JSONSerialization.jsonObject(with: fixture) as? [String: Any] else {
+                    throw TestFailure(description: "v1 fixture was not a JSON object")
+                }
+                object["textSize"] = "gigantic"
+                let invalidPreference = try JSONSerialization.data(withJSONObject: object)
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                try invalidPreference.write(to: root.appendingPathComponent("watchlist.json"))
+                let store = try PersistenceStore(rootDirectory: root)
+                guard case .loaded(let state) = store.load() else {
+                    throw TestFailure(description: "unrecognized textSize entered recovery")
+                }
+                try expect(state.textSize == .medium, "unrecognized textSize did not default to medium")
+                try expect(!store.recoveryProtected, "unrecognized textSize protected a valid v1 file")
+            },
+            AcceptanceTest(name: "06d text size preference round trips through persistence") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                var state = PersistedState.bitcoinSeed()
+                state.textSize = .extraLarge
+                try store.save(state)
+                guard case .loaded(let reloaded) = store.load() else {
+                    throw TestFailure(description: "saved textSize did not load")
+                }
+                try expect(reloaded.textSize == .extraLarge, "saved textSize changed during round trip")
             },
             AcceptanceTest(name: "07 future unregistered-older dispatch path") {
                 try expect(schemaDispatch(version: 1, current: 2, registeredVersions: [0, 2]) == .unregisteredOlder,

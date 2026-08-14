@@ -407,6 +407,27 @@ app 內以 `.dynamicTypeSize(...)` 覆寫整個面板可行，但有兩項後果
 
 字級偏好與 `alertsEnabled` 同樣持久化於 root，**`schemaVersion` 一樣不得升版**（理由同 Phase 5.2）。
 
+### Phase 5.4: 字級改用倍率、圖示對齊（規劃中，待委派 `ui6`）
+`ui5` 交付後使用者實跑發現兩項。續接同一 thread。
+
+- [ ] **字級設定無效 —— 只有面板放大，字沒變** —— 見下方根因
+- [ ] **`+` 與齒輪視覺大小不一致** —— 兩者皆 `.imageScale(.large)` 且字級相同，差異來自 SF Symbol 本身的視覺重量：`plus` 為兩條細筆畫，`gearshape` 為帶齒實心輪廓，同 point size 下面積差距明顯。**使用者裁決：改用 `plus.circle` / `gearshape.circle`**，兩者皆有外框以對齊視覺重量
+
+#### 根因：`.dynamicTypeSize` 在 macOS 不縮放語意字體
+
+`.dynamicTypeSize(...)` 是 **iOS 機制**。macOS 的文字縮放走系統輔助使用設定，SwiftUI **不允許 app 覆寫**。該 modifier 確實寫進了 environment，但**沒有任何 `Text` 會因此改變大小**；而同時掛上的 `.frame` 依級距生效，於是產生「框變大、字沒變」。
+
+**這是我的規劃缺陷，非 Codex 執行錯誤。** brief 直接指名了 `.dynamicTypeSize(...)` 這個 API。這正是本專案的招牌失敗形狀再現一次：**假設一個平台操作存在，但它在該平台上不做那件事**。前次是 `AsyncStream.Continuation` 沒有 purge，這次是 macOS 的 `dynamicTypeSize` 不縮放字體。差別在於這次由實跑在數分鐘內抓到，而非七輪紙上複審。
+
+#### 修法與其代價（使用者已裁決：採倍率）
+
+macOS 上「app 內可調字級」與「跟隨系統輔助使用設定」**不可兼得**。採倍率方案：
+
+- 四級距對應倍率（Small 0.85 / Medium 1.00 / Large 1.20 / Extra Large 1.45），Medium 即現行外觀
+- **必須引入固定點數**，故解除 `ui5` brief 中「禁 `.system(size:)`」的約束
+- 但固定點數**只允許出現在單一集中的字型函式內**。散落各處等同回到 ui1 之前的狀態，該狀態正是「UI 文字都過小」那輪的成因
+- 明確接受的代價：不再跟隨 macOS 輔助使用的文字大小設定
+
 ### 實作期風險清單（round-7 C 群，不再於紙上修訂）
 下列六項於 Phase 2.17 決定轉為實作期風險，Phase 2.19 的 `SPEC.md` 已逐項查證為**已解**（非接受）。實跑至今未觸發，保留備查：
 
