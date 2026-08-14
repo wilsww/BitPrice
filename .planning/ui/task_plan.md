@@ -135,6 +135,25 @@ Complete
 - The 140-point chart floor is retained. Only the fallback path, selected when the measured stack plus floor cannot fit, uses a detail `ScrollView`; empty/no-selection branches retain the same detail-region height.
 - The prior guessed reserve and `minHeight`/`ScrollView` pairing are gone. Strict build/tests and source-policy audits passed; no Aqua GUI session was available.
 
+### Phase 27: Add chart-open baseline and trim detail heading
+- [x] Read the current SelectedCoinDetail/Sparkline and axis tests
+- [x] Remove the redundant `details` heading word
+- [x] Add a first-candle-close helper with degenerate-case coverage
+- [x] Draw a rounded-precision labelled dashed baseline behind the existing fill/stroke
+- **Status:** complete
+
+### Phase 28: Verify and record UI13
+- [x] Run strict build, full tests, bundle checks, and source-policy audits
+- [x] Confirm plot bounds, gap-safe fill, and measured layout remain unchanged
+- [x] Record the baseline source/label and no-Aqua limitation
+- [x] Write `.codex-implement/_codex_impl_summary_ui13.md`
+- **Status:** complete
+
+## UI13 completion
+- Selected detail now shows the symbol and quote asset without the redundant `details` suffix.
+- The chart baseline is the first candle close for series with at least two points, labelled with the existing axis precision and drawn behind the unchanged fill/stroke.
+- Baseline helper tests cover normal, flat, single-point, and empty series. Strict build/tests and bundle/source audits passed; no Aqua GUI session was available.
+
 
 
 ### Phase 11: Implement Settings layout, text-size preference, and icon scaling

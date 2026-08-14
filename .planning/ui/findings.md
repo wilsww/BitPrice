@@ -156,6 +156,9 @@
 - No Aqua GUI session exists. A human desktop check must confirm the one-line mapping summary and long-ID tooltip are comfortable in the actual panel.
 
 ## UI11: flexible detail chart and directional fill
+- UI13 adds the chart's opening-close reference from the first `ChartSeries` point only when at least two points exist; sparse series therefore do not receive a fabricated baseline.
+- The baseline uses the existing true-bound `priceFraction`, the shared `pricePrecision`, and `formattedPrice`. Its inline label says `24h chart open`, so it describes this chart series rather than asserting the row quote's change venue.
+- Draw order remains axes/grid, muted dashed baseline and label, then the existing per-segment fill and full-strength stroke. Layout sizing and gap handling are unchanged.
 - UI12 correction: the prior `125 * multiplier` reserve was only an estimate of sibling-view height. It could exceed the real stack and leave dead space, or undershoot it and make the `minHeight` detail child inside a `ScrollView` advertise overflow and show a scrollbar.
 - The normal selected-detail path must be a plain finite-height `VStack`; the header, disclosure, optional stale line, and mapping line size naturally, while a greedy chart fills the remaining proposal. The chart floor is a safety constraint, not a substitute for measurement.
 - Scrolling must not surround content that fits. If the detail region cannot satisfy the natural text stack plus chart floor at Extra Large, only that true overflow path may scroll; the no-selection and no-items empty branches retain the same computed detail-region height.

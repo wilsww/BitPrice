@@ -695,6 +695,8 @@ struct BitPriceTests {
                     CandlePoint(bucketStart: start.addingTimeInterval(3_600), close: 30),
                     CandlePoint(bucketStart: start.addingTimeInterval(7_200), close: 40)
                 ]
+                try expect(ChartAxisCalculator.openingClose(for: normal) == 10,
+                           "normal series opening close was not the first candle")
                 try expect(
                     ChartAxisCalculator.priceTicks(for: normal) == [10, 20, 30, 40],
                     "normal price range ticks do not span the actual minimum and maximum"
@@ -777,6 +779,10 @@ struct BitPriceTests {
                     CandlePoint(bucketStart: start.addingTimeInterval(60), close: Decimal(string: "0.33")!)
                 ]
                 try expect(
+                    ChartAxisCalculator.openingClose(for: flat) == Decimal(string: "0.33")!,
+                    "flat series opening close did not equal both plot bounds"
+                )
+                try expect(
                     ChartAxisCalculator.priceTicks(for: flat) == [Decimal(string: "0.33")!],
                     "flat price range did not collapse to one truthful tick"
                 )
@@ -790,11 +796,15 @@ struct BitPriceTests {
                 )
 
                 let single = [CandlePoint(bucketStart: start, close: Decimal(string: "63824.73")!)]
+                try expect(ChartAxisCalculator.openingClose(for: single) == nil,
+                           "single-point series fabricated an opening baseline")
                 try expect(
                     ChartAxisCalculator.priceTicks(for: single) == [Decimal(string: "63824.73")!],
                     "single-point price range fabricated ticks"
                 )
                 try expect(ChartAxisCalculator.timeTicks(for: single) == [start], "single-point time range fabricated ticks")
+                try expect(ChartAxisCalculator.openingClose(for: []) == nil,
+                           "empty series fabricated an opening baseline")
                 try expect(ChartAxisCalculator.priceTicks(for: []).isEmpty, "empty price range fabricated ticks")
                 try expect(ChartAxisCalculator.timeTicks(for: []).isEmpty, "empty time range fabricated ticks")
             },

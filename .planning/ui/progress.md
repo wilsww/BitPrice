@@ -332,3 +332,25 @@
 - Added-line audits found no forbidden presentation APIs, shortcuts, `Form`, or fixed font sizes; no `chartHeight` or `125 * multiplier` estimate remains, and non-target behavior files are unchanged.
 - Reasoning: at Medium, the finite first candidate lays out the header/disclosure/mapping rows naturally and the greedy chart consumes all remaining detail height, leaving no unallocated band. At Extra Large, if those measured rows plus the 140-point floor do not fit, `ViewThatFits` selects the intrinsic content fallback so text remains reachable by scrolling. When the content fits, the first candidate is selected and no scroll indicator exists.
 - No layout test was added because this is a pure SwiftUI presentation restructure; the existing test suite and strict build provide compile/regression coverage.
+
+## UI13 session: 2026-08-15
+
+### Phase 27: Add chart-open baseline and trim detail heading
+- **Status:** in_progress
+- Read the planning skill, current planning records, and the requested source/test context.
+- Confirmed `SelectedCoinDetail` still renders `"\\(item.symbol) details"`, while `Sparkline` already has true price bounds, shared axis precision, and the correct fill/stroke ordering needed for a baseline.
+- Chose `ChartAxisCalculator.openingClose(for:)` as a pure helper: it returns the first candle close only when at least two points exist. The baseline label will include `24h chart open` and the existing rounded axis-formatted value, avoiding any claim about a different venue's row change basis.
+
+### Phase 27: Implement chart-open baseline and trim detail heading
+- **Status:** complete
+- Changed the selected-detail heading from `"\(item.symbol) details"` to the symbol alone, retaining the quote asset and all controls unchanged.
+- Added `ChartAxisCalculator.openingClose(for:)`, returning the first candle close only for series with at least two points. Added normal, flat, single-point, and empty assertions to the existing axis test.
+- Added a dashed muted baseline using true plot bounds, plus a `24h chart open · <rounded value>` label. The line is painted before the existing fill/stroke; the label is painted afterward for readability at min/max edges.
+
+### Phase 28: Verify and record UI13
+- **Status:** complete
+- Final `bash scripts/run-tests.sh`: 32 passed, 0 failed, 2 expected no-Aqua skips.
+- Final `bash scripts/build-app.sh`: passed under strict Swift 6 warnings-as-errors; plist lint, codesign verification, `otool -L`, and `Contents/Resources/AppIcon.icns` checks passed.
+- Final added-line audit found none of `sheet(`, `popover(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, `Form {`, or `.system(size:`). Non-target behavior files remain unchanged.
+- Plot bounds, gap-safe segment fill, measured `ViewThatFits` sizing, and panel sizing were not changed. No baseline is drawn for single-point or empty series.
+- No Aqua GUI session is available; a human desktop check remains necessary for label placement/readability at plot edges and the visual balance of the baseline against the colored chart.
