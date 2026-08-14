@@ -365,6 +365,27 @@ watchlist 上限 25、termination flush（debounce 刪除故窗口不存在）�
 - [ ] 撰寫使用說明（啟動、加幣、設定主幣、設 alert）
 - **狀態:** in progress
 
+### Phase 5.2: Settings 頁面與 alert 總開關（規劃中，待委派 `ui4`）
+使用者於 2026-08-14 提出三項，另加一項我從截圖發現的缺陷。
+
+- [ ] **新增 Settings 頁面** — `PanelRoute` 加 `.settings` case，header 右側加齒輪鍵。與 `.add`/`.alert`/`.confirmQuit` 同一就地替換模式，不得引入任何獨立 window
+- [ ] **退出鍵移入 Settings** — header 左側電源鍵移除，`PanelRoute.confirmQuit` 隨之刪除。**使用者裁決：Settings 內直接退出，不再另跳確認頁**（齒輪 → Settings → Quit 已是三步，Settings 頁本身構成刻意進入，誤觸風險由路徑深度消化）
+- [ ] **Alert 總開關** — **使用者裁決：完全暫停求值**。關閉期間 `AppModel.evaluateAlert` 直接 return，`isArmed`/`lastFiredAt` 完全凍結不變。重新開啟後若價格仍在門檻外，下一個 tick 立即觸發
+- [ ] **總開關關閉時必須在清單列上可見** — 否則使用者會看到 `Alert` 鍵、設定完成、然後什麼都不發生。**這正是 hysteresis 缺陷的形狀**（引擎正確、UI 未揭露），不得重演
+- [ ] **Y 軸刻度位數不一致**（截圖發現，使用者未提）— 端點為真實 min/max（`0.3384`/`0.3268`，4 位），中間刻度為 `min + step × i` 的除不盡值，經 `formatPrice` 對 <1 價格給到 6 位而印出 `0.334533`。**使用者裁決：刻度值取整到一致位數，但軸的上下界仍須涵蓋真實 min/max**
+
+#### 持久化：`schemaVersion` 維持 1，不得升版
+
+`alertsEnabled` 為 root 層布林值。**`currentSchemaVersion` 必須維持 `1`**，以 `decodeIfPresent(...) ?? true` 讀取。
+
+理由：`DomainModels.swift:387` 的 `guard state.schemaVersion == currentSchemaVersion` 是**嚴格相等**。若升到 2，現有使用者的 v1 檔案會落入 `.unregisteredOlder` 分支 → **整個 app 進 read-only recovery mode，watchlist 退回只有 BTC 的種子**。這與 round-6 major 5（新增非 optional 欄位使整份檔案 decode 失敗）是同一形狀。
+
+`V1StateDTO.init(from:)` 為手寫逐鍵解碼，未知鍵自動忽略，故新欄位不會破壞舊版讀取。反向降級亦安全：舊版 app 忽略 `alertsEnabled` → alert 全開，**不會靜默吞掉通知**。
+
+#### Y 軸：刻度值與軸界必須分離
+
+取整後的刻度**不可**反過來當作繪圖的 min/max，否則資料點會畫到格線外或被裁掉。刻度線是參考線（不宣稱是資料點，故可取整）；軸界是資料真實範圍（必須涵蓋 min/max）。兩者是不同的量。
+
 ### 實作期風險清單（round-7 C 群，不再於紙上修訂）
 下列六項於 Phase 2.17 決定轉為實作期風險，Phase 2.19 的 `SPEC.md` 已逐項查證為**已解**（非接受）。實跑至今未觸發，保留備查：
 
@@ -406,6 +427,10 @@ watchlist 上限 25、termination flush（debounce 已刪除故窗口不存在�
 | 圖示程式繪製、build 時產生，不進版控 | 零第三方素材依賴，可重現，且不必在 git 存 binary |
 | 選取列與設定主幣分離 | 星號決定 menu bar 顯示哪一幣；若點列即設主幣，使用者只是想看走勢圖就會靜默改掉 bar |
 | mapping IDs 保留（移入詳細區而非刪除） | 那是使用者確認該列實際追蹤哪個市場的唯一依據，正是 venue confirmation 存在的理由 |
+| alert 總開關採「完全暫停求值」而非「抑制送出」 | 符合「總開關」直覺：關閉期間 latch 凍結，重開後價格若仍在門檻外會立即觸發。代價是重開瞬間可能同時噴出多則通知，使用者已知悉並接受 |
+| 新增 `alertsEnabled` **不升** `schemaVersion` | `DomainModels.swift:387` 為嚴格相等比對，升版會使現有 v1 檔案落入 `.unregisteredOlder` 而整個進 recovery mode。`V1StateDTO.init(from:)` 手寫逐鍵解碼會忽略未知鍵，故新欄位對新舊雙向皆安全 |
+| Y 軸刻度取整，但軸界維持真實 min/max | 刻度線是參考線、不宣稱是資料點，故可取整以求位數一致；軸界是資料真實範圍，取整會使資料點畫出格線外或被裁掉。兩者是不同的量，不可混用 |
+| 退出改為 Settings 內單鍵（移除確認頁） | 齒輪 → Settings → Quit 已是三步，Settings 頁本身即構成刻意進入，誤觸風險由路徑深度消化 |
 
 ## 遇到的錯誤
 
