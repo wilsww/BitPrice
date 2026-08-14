@@ -272,42 +272,58 @@ struct ContentView: View {
             }
             if let error = model.lastError { BannerView(text: error, color: .red) }
             if model.items.isEmpty {
-                ContentUnavailableView("No watched coins", systemImage: "bitcoinsign.circle", description: Text("Add a market to begin."))
-                    .frame(maxHeight: .infinity)
-                Divider()
-                EmptyDetailView(hasItems: false)
-                    .frame(height: 350)
-            } else {
-                List(selection: $selectedItemID) {
-                    ForEach(model.items) { item in
-                        WatchRow(model: model, item: item) { route = .alert(item.id) }
-                            .tag(item.id)
-                    }
-                    .onMove { source, destination in
-                        do { try model.moveItems(fromOffsets: source, toOffset: destination) }
-                        catch { /* AppModel keeps the durable error surface. */ }
-                    }
-                    .onDelete { offsets in
-                        for index in offsets {
-                            do { try model.removeItem(id: model.items[index].id) }
-                            catch { break }
-                        }
+                GeometryReader { geometry in
+                    let detailHeight = detailHeight(for: geometry.size.height)
+                    VStack(spacing: 0) {
+                        ContentUnavailableView("No watched coins", systemImage: "bitcoinsign.circle", description: Text("Add a market to begin."))
+                            .frame(maxHeight: .infinity)
+                        Divider()
+                        EmptyDetailView(hasItems: false)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .frame(height: detailHeight)
                     }
                 }
-                .listStyle(.plain)
-                .frame(maxHeight: .infinity)
-                Divider()
-                if let selectedItem {
-                    ScrollView {
-                        SelectedCoinDetail(model: model, item: selectedItem) {
-                            removeSelectedItem()
+            } else {
+                GeometryReader { geometry in
+                    let detailHeight = detailHeight(for: geometry.size.height)
+                    VStack(spacing: 0) {
+                        List(selection: $selectedItemID) {
+                            ForEach(model.items) { item in
+                                WatchRow(model: model, item: item) { route = .alert(item.id) }
+                                    .tag(item.id)
+                            }
+                            .onMove { source, destination in
+                                do { try model.moveItems(fromOffsets: source, toOffset: destination) }
+                                catch { /* AppModel keeps the durable error surface. */ }
+                            }
+                            .onDelete { offsets in
+                                for index in offsets {
+                                    do { try model.removeItem(id: model.items[index].id) }
+                                    catch { break }
+                                }
+                            }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .listStyle(.plain)
+                        .frame(maxHeight: .infinity)
+                        Divider()
+                        if let selectedItem {
+                            ScrollView {
+                                SelectedCoinDetail(
+                                    model: model,
+                                    item: selectedItem,
+                                    chartHeight: chartHeight(for: detailHeight)
+                                ) {
+                                    removeSelectedItem()
+                                }
+                                .frame(maxWidth: .infinity, minHeight: detailHeight, alignment: .top)
+                            }
+                            .frame(height: detailHeight)
+                        } else {
+                            EmptyDetailView(hasItems: true)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .frame(height: detailHeight)
+                        }
                     }
-                    .frame(height: 350)
-                } else {
-                    EmptyDetailView(hasItems: true)
-                        .frame(height: 350)
                 }
             }
         }
@@ -344,6 +360,17 @@ struct ContentView: View {
         case .stale: .orange
         case .offline: .red
         }
+    }
+
+    private func detailHeight(for availableHeight: CGFloat) -> CGFloat {
+        let minimumListHeight: CGFloat = 180
+        let requestedHeight = max(300, availableHeight * 0.5)
+        return min(requestedHeight, max(0, availableHeight - minimumListHeight - 1))
+    }
+
+    private func chartHeight(for detailHeight: CGFloat) -> CGFloat {
+        let nonChartHeight = 125 * PanelFont.multiplier(for: model.persistedState.textSize)
+        return max(140, detailHeight - nonChartHeight)
     }
 }
 
@@ -561,6 +588,7 @@ private struct EmptyDetailView: View {
 private struct SelectedCoinDetail: View {
     @ObservedObject var model: AppModel
     let item: WatchItem
+    let chartHeight: CGFloat
     let remove: () -> Void
 
     var body: some View {
@@ -596,8 +624,8 @@ private struct SelectedCoinDetail: View {
             }
 
             if let chart = model.charts[item.id] {
-                Sparkline(series: chart)
-                    .frame(height: 200)
+                Sparkline(series: chart, color: chartColor)
+                    .frame(height: chartHeight)
                 Text("24h chart · \(chart.source.rawValue.capitalized)/\(chart.quoteAsset)")
                     .panelFont(.body)
                     .foregroundStyle(.secondary)
@@ -619,6 +647,14 @@ private struct SelectedCoinDetail: View {
 
     private var itemIndex: Int? {
         model.items.firstIndex { $0.id == item.id }
+    }
+
+    private var chartColor: Color {
+        guard let change = model.quotes[item.id]?.change,
+              case .percent(let value) = change else { return .accentColor }
+        if value > 0 { return .green }
+        if value < 0 { return .red }
+        return .secondary
     }
 
     private var mappingDetails: some View {
@@ -654,6 +690,7 @@ private struct SelectedCoinDetail: View {
 
 private struct Sparkline: View {
     let series: ChartSeries
+    let color: Color
     @Environment(\.panelTextSize) private var panelTextSize
 
     var body: some View {
@@ -692,7 +729,8 @@ private struct Sparkline: View {
                 minimumPrice: priceBounds.minimum,
                 maximumPrice: priceBounds.maximum,
                 start: start,
-                end: end
+                end: end,
+                color: color
             )
         }
         .opacity(series.latestRefreshFailed ? 0.45 : 1)
@@ -761,10 +799,11 @@ private struct Sparkline: View {
         minimumPrice: Decimal,
         maximumPrice: Decimal,
         start: Date,
-        end: Date
+        end: Date,
+        color: Color
     ) {
         guard series.points.count >= 2 else { return }
-        var path = Path()
+        var segment: [CGPoint] = []
         var previousDate: Date?
         for point in series.points {
             let xFraction = ChartAxisCalculator.timeFraction(point.bucketStart, start: start, end: end)
@@ -777,14 +816,46 @@ private struct Sparkline: View {
                 x: plotRect.minX + plotRect.width * xFraction,
                 y: plotRect.maxY - plotRect.height * yFraction
             )
-            if let previousDate, point.bucketStart.timeIntervalSince(previousDate) <= 5_400 {
-                path.addLine(to: position)
-            } else {
-                path.move(to: position)
+            if let previousDate,
+               point.bucketStart.timeIntervalSince(previousDate) > 5_400 {
+                drawSegment(context: context, points: segment, plotRect: plotRect, color: color)
+                segment.removeAll(keepingCapacity: true)
             }
+            segment.append(position)
             previousDate = point.bucketStart
         }
-        context.stroke(path, with: .color(.accentColor), lineWidth: 2)
+        drawSegment(context: context, points: segment, plotRect: plotRect, color: color)
+    }
+
+    private func drawSegment(
+        context: GraphicsContext,
+        points: [CGPoint],
+        plotRect: CGRect,
+        color: Color
+    ) {
+        guard points.count >= 2 else { return }
+        var line = Path()
+        line.move(to: points[0])
+        for point in points.dropFirst() {
+            line.addLine(to: point)
+        }
+
+        var fill = line
+        if let last = points.last, let first = points.first {
+            fill.addLine(to: CGPoint(x: last.x, y: plotRect.maxY))
+            fill.addLine(to: CGPoint(x: first.x, y: plotRect.maxY))
+            fill.closeSubpath()
+        }
+        let gradientStartY = points.map { $0.y }.min() ?? plotRect.minY
+        context.fill(
+            fill,
+            with: .linearGradient(
+                Gradient(colors: [color.opacity(0.26), color.opacity(0)]),
+                startPoint: CGPoint(x: plotRect.midX, y: gradientStartY),
+                endPoint: CGPoint(x: plotRect.midX, y: plotRect.maxY)
+            )
+        )
+        context.stroke(line, with: .color(color), lineWidth: 2)
     }
 }
 

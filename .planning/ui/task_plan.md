@@ -4,7 +4,7 @@
 Implement the app icon, textual menu-bar price, larger typography, compact selectable rows, and a bottom chart/detail area without changing non-UI behavior or concurrency contracts.
 
 ## Current phase
-UI10 in progress
+Complete
 
 ### Phase 13: Implement macOS font scaling and header icon alignment
 - [x] Read the current UI6 sources and restore planning context
@@ -96,6 +96,26 @@ UI10 in progress
 - Selected detail now has no repeated starred-coin hint, while row star help text remains intact.
 - Mapping IDs are one selectable, tail-truncated, venue-prefixed line with explicit absent-mapping markers and full-text help.
 - Strict build, existing tests, bundle checks, and source-policy audits passed. No Aqua GUI session was available for visual confirmation.
+
+### Phase 23: Implement flexible chart detail and directional fill
+- [x] Read current ContentView/SelectedCoinDetail/Sparkline and repository verification context
+- [x] Replace fixed list/detail heights with a bounded shared layout and finite chart height
+- [x] Preserve reachability at Extra Large and keep empty-detail sizing consistent
+- [x] Add change-direction chart stroke/fill with gap-safe gradient segments
+- [x] Inspect tall-chart axis/layout behavior and document the baseline decision
+- **Status:** complete
+
+### Phase 24: Verify and record UI11
+- [x] Run strict build, full tests, bundle checks, and source-policy audits
+- [x] Record the ScrollView unbounded-height finding and container strategy
+- [x] Write `.codex-implement/_codex_impl_summary_ui11.md`
+- **Status:** complete
+
+## UI11 completion
+- List/detail now share a bounded layout-derived region; the chart receives finite remaining height and grows with the text-size panel frame while retaining a sensible floor and overflow scrolling.
+- Gradient fill follows the row quote direction and breaks across the existing 90-minute gaps; no fabricated baseline was added.
+- Strict build, existing tests, bundle checks, and source-policy audits passed. No Aqua GUI session was available for visual confirmation.
+
 
 
 ### Phase 11: Implement Settings layout, text-size preference, and icon scaling

@@ -281,3 +281,30 @@
 - Final added-line audit found none of `sheet(`, `popover(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, `Form {`, or `.system(size:`; `NotificationService.swift` is unchanged.
 - No app launch or visual verification was attempted because this host has no Aqua GUI session. A desktop check remains necessary for long-ID truncation and tooltip/readability behavior.
 - Wrote `.codex-implement/_codex_impl_summary_ui10.md`.
+
+## UI11 session: 2026-08-14
+
+### Phase 23: Inspect chart/detail layout and fill requirements
+- **Status:** complete
+- Read the planning skill, current `.planning/ui/` records, requested source context, and the existing `ContentView`, `SelectedCoinDetail`, and `Sparkline` implementation.
+- Confirmed the selected-detail ScrollView previously received unbounded height and contained a fixed 350-point region around a fixed 200-point chart; the no-items branch also used the old fixed detail height.
+- Chose a bounded `GeometryReader` strategy: the list/detail body gets the available height, the detail region receives a half-height share subject to a list floor, and the chart receives a finite remaining height with a 140-point minimum. The detail ScrollView remains only as an overflow mechanism.
+- Confirmed `ChartSeries` has no opening-close field, so no truthful baseline can be sourced without fabricating data.
+- The first summary-file patch was malformed because it omitted the `Begin Patch` marker; no repository content was changed by that failed patch, and the summary was then added correctly.
+
+### Phase 23: Implement flexible chart detail and directional fill
+- **Status:** complete
+- Replaced the fixed 350-point populated and empty detail branches with bounded GeometryReader regions that split available body height between list and detail, keeping empty/no-selection/selected states aligned.
+- Passed a finite text-size-aware chart height into `SelectedCoinDetail`; the chart uses the remaining region with a 140-point floor, and the bounded ScrollView handles only genuine overflow.
+- Added directional stroke/fill from `model.quotes[item.id]?.change`: green for positive, red for negative, secondary for zero, and accent for unavailable/missing change.
+- Filled each contiguous series segment with a vertical color-to-transparent gradient before stroking it, preserving the existing >5,400-second gap breaks. No baseline was added because no opening-close data exists.
+- Reasoned that the four Y ticks, actual-bound fractions, 108-point Y-label column, and 50-point X-label reserve remain independent of chart height and therefore scale sensibly above 300 points.
+
+### Phase 24: Verify and record UI11
+- **Status:** complete
+- Final `bash scripts/run-tests.sh`: 32 passed, 0 failed, 2 expected no-Aqua skips.
+- Final `bash scripts/build-app.sh`: passed under strict Swift 6 warnings-as-errors; plist lint, codesign verification, `otool -L`, and `Contents/Resources/AppIcon.icns` checks passed.
+- Final inspection confirmed no fixed 200/350 chart/detail frame remains, the detail ScrollView has finite content sizing, directional fallback does not inspect chart endpoints, and gap-safe fill segments are used.
+- Final added-line audit found none of `sheet(`, `popover(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, `Form {`, or `.system(size:`; `NotificationService.swift` is unchanged.
+- No app launch or visual verification was attempted because this host has no Aqua GUI session. A desktop check remains necessary for tall-axis spacing, chart fill appearance, and Extra Large overflow behavior.
+- Wrote `.codex-implement/_codex_impl_summary_ui11.md`.

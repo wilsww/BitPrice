@@ -154,3 +154,11 @@
 - The line truncates as a whole to protect the fixed panel width; `.help(mappingSummary)` retains the complete string for long identifiers.
 - Verification passed: 32 tests with 0 failures and 2 expected skips; strict app build; plist/signing/linkage/icon checks; `git diff --check`; forbidden API/font audits; and direct preservation checks for row help, chart disclosures, stale messaging, and detail controls.
 - No Aqua GUI session exists. A human desktop check must confirm the one-line mapping summary and long-ID tooltip are comfortable in the actual panel.
+
+## UI11: flexible detail chart and directional fill
+- A ScrollView proposes unbounded height along its scroll axis. A greedy chart inside it cannot fill the visible detail region reliably, so the fix uses an outer bounded `GeometryReader` and passes an explicit finite chart height into `SelectedCoinDetail`.
+- The list/detail body shares its available height: the detail receives half the body, with a 300-point target floor constrained by a 180-point minimum list region. This removes the fixed 350-point branch while keeping the empty-detail and selected/no-selection branches aligned.
+- Chart height is the bounded detail height minus a text-size-scaled non-chart reserve, with a 140-point floor. At Extra Large the chart can shrink to that floor and the finite detail ScrollView can scroll if header/disclosure/mapping content genuinely exceeds the region; the outer panel frame still comes only from the text-size preference.
+- Sparkline color comes from the selected item's current quote change, matching row convention: positive green, negative red, zero secondary, and unavailable/missing accent. No direction is inferred from chart endpoints.
+- The area fill is drawn per contiguous <=90-minute segment before the full-strength stroke, so gradients do not span data gaps. Four existing axis ticks and the 50-point axis-label reserve remain valid at taller chart heights.
+- No baseline was added: `ChartSeries` exposes no opening close, and a midpoint or first/last inference would fabricate a reference.
