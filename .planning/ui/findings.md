@@ -189,3 +189,8 @@
 - The baseline axis label now uses a filled diamond followed by the same rounded value as ordinary ticks. Bold weight and the distinct baseline color remain; the Y-axis reserve returns to the ordinary-label scale rather than being widened for explanatory words.
 - The diamond alone tells an axis-only reader that this is a specially marked reference value, but not that it is the 24-hour opening close. A `.help(...)` on the chart supplies that meaning without affecting layout width, and no floating in-plot label was reintroduced.
 - The Settings identity block now has intrinsic height and remains directly above the closing disclosure. The existing spacer owns the flexible space above it, while `.layoutPriority(-1)` remains so decoration yields to real content at Extra Large.
+
+## UI16: measured Y-axis reserve
+- Tick selection is performed from `plotHeight` before any width-dependent geometry. Each selected axis label is resolved with the exact panel-size font and measured unconstrained; the widest measured result plus the existing 9-point label gap determines the left inset.
+- The measured inset is capped at 40% of the available Canvas width, leaving at least the remaining 60% (minus the existing right reserve) for the plot. If the cap binds at a narrow panel or pathological precision, the same measured label text is shortened with an ellipsis inside the capped label width; font size and shared numeric precision are not changed.
+- The measurement cannot be isolated into a platform-independent pure test without replacing the authoritative `ResolvedText.measure(in:)` operation, so no hollow width test was added. Existing axis value tests remain unchanged.

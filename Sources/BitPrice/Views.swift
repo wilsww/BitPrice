@@ -809,6 +809,9 @@ private struct SelectedCoinDetail: View {
 }
 
 private struct Sparkline: View {
+    private static let axisLabelGap: CGFloat = 9
+    private static let maximumAxisFraction: CGFloat = 0.4
+
     let series: ChartSeries
     let color: Color
     let baselineColor: Color
@@ -824,32 +827,54 @@ private struct Sparkline: View {
                   let start = timeTicks.first,
                   let end = timeTicks.last else { return }
 
-            let yAxisWidth = max(108, 108 * PanelFont.multiplier(for: panelTextSize))
+            // Tick selection depends on plot height, not width. Measure the
+            // labels after selecting ticks and before constructing the plot
+            // rectangle, so the width calculation has no circular dependency.
+            let plotHeight = max(0, size.height - 50)
+            let axisTicks = ChartAxisCalculator.axisTicks(
+                for: series.points,
+                plotHeight: plotHeight,
+                minimumPixelSeparation: PanelFont.pointSize(for: .body, preference: panelTextSize)
+            )
+            let naturalAxisLabels = axisTicks.map { tick in
+                resolvedPriceAxisLabel(
+                    context: context,
+                    text: axisLabelText(for: tick, pricePrecision: pricePrecision),
+                    isBaseline: tick.isBaseline
+                )
+            }
+            let widestAxisLabel = naturalAxisLabels.map { label in
+                label.measure(
+                    in: CGSize(
+                        width: CGFloat.greatestFiniteMagnitude,
+                        height: CGFloat.greatestFiniteMagnitude
+                    )
+                ).width
+            }.max() ?? 0
+            let maximumAxisWidth = size.width * Self.maximumAxisFraction
+            let yAxisWidth = min(
+                widestAxisLabel + Self.axisLabelGap,
+                maximumAxisWidth
+            )
             let plotRect = CGRect(
                 x: yAxisWidth,
                 y: 14,
                 width: max(0, size.width - yAxisWidth - 10),
-                height: max(0, size.height - 50)
+                height: plotHeight
             )
             guard plotRect.width > 0, plotRect.height > 0 else { return }
-
-            let priceTicks = ChartAxisCalculator.axisTicks(
-                for: series.points,
-                plotHeight: plotRect.height,
-                minimumPixelSeparation: PanelFont.pointSize(for: .body, preference: panelTextSize)
-            )
 
             drawAxes(
                 context: context,
                 plotRect: plotRect,
-                priceTicks: priceTicks,
+                priceTicks: axisTicks,
                 pricePrecision: pricePrecision,
+                labelWidth: max(0, yAxisWidth - Self.axisLabelGap),
                 timeTicks: timeTicks,
                 minimumPrice: priceBounds.minimum,
                 maximumPrice: priceBounds.maximum,
                 start: start,
-                end: end,
-                color: baselineColor
+                end: end
             )
             if let openingClose {
                 drawBaselineLine(
@@ -880,12 +905,12 @@ private struct Sparkline: View {
         plotRect: CGRect,
         priceTicks: [ChartAxisTick],
         pricePrecision: Int,
+        labelWidth: CGFloat,
         timeTicks: [Date],
         minimumPrice: Decimal,
         maximumPrice: Decimal,
         start: Date,
-        end: Date,
-        color: Color
+        end: Date
     ) {
         for tick in priceTicks {
             let fraction = ChartAxisCalculator.priceFraction(tick.value, minimum: minimumPrice, maximum: maximumPrice)
@@ -897,19 +922,17 @@ private struct Sparkline: View {
                 context.stroke(gridline, with: .color(.secondary.opacity(0.22)), lineWidth: 1)
             }
 
-            let tickText = ChartAxisCalculator.formattedPrice(tick.value, fractionDigits: pricePrecision)
-            let label = context.resolve(
-                Text(tick.isBaseline ? "◆ \(tickText)" : tickText)
-                    .font(
-                        PanelFont.scaledFont(
-                            .body,
-                            weight: tick.isBaseline ? .bold : nil,
-                            preference: panelTextSize
-                        )
-                    )
-                    .foregroundColor(tick.isBaseline ? color : .secondary)
+            let label = resolvedPriceAxisLabel(
+                context: context,
+                text: truncatedAxisLabelText(
+                    for: tick,
+                    pricePrecision: pricePrecision,
+                    maximumWidth: labelWidth,
+                    context: context
+                ),
+                isBaseline: tick.isBaseline
             )
-            context.draw(label, at: CGPoint(x: plotRect.minX - 9, y: y), anchor: .trailing)
+            context.draw(label, at: CGPoint(x: plotRect.minX - Self.axisLabelGap, y: y), anchor: .trailing)
         }
 
         var xAxis = Path()
@@ -940,6 +963,63 @@ private struct Sparkline: View {
             }
             context.draw(label, at: CGPoint(x: x, y: plotRect.maxY + 8), anchor: anchor)
         }
+    }
+
+    private func axisLabelText(for tick: ChartAxisTick, pricePrecision: Int) -> String {
+        let tickText = ChartAxisCalculator.formattedPrice(tick.value, fractionDigits: pricePrecision)
+        return tick.isBaseline ? "◆ \(tickText)" : tickText
+    }
+
+    private func resolvedPriceAxisLabel(
+        context: GraphicsContext,
+        text: String,
+        isBaseline: Bool
+    ) -> GraphicsContext.ResolvedText {
+        context.resolve(
+            Text(text)
+            .font(
+                PanelFont.scaledFont(
+                    .body,
+                    weight: isBaseline ? .bold : nil,
+                    preference: panelTextSize
+                )
+            )
+            .foregroundColor(isBaseline ? baselineColor : .secondary)
+        )
+    }
+
+    private func truncatedAxisLabelText(
+        for tick: ChartAxisTick,
+        pricePrecision: Int,
+        maximumWidth: CGFloat,
+        context: GraphicsContext
+    ) -> String {
+        let fullText = axisLabelText(for: tick, pricePrecision: pricePrecision)
+        guard maximumWidth > 0 else { return "" }
+        let fullWidth = resolvedPriceAxisLabel(
+            context: context,
+            text: fullText,
+            isBaseline: tick.isBaseline
+        ).measure(
+            in: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        ).width
+        guard fullWidth > maximumWidth else { return fullText }
+
+        let ellipsis = "…"
+        var prefix = ""
+        for character in fullText {
+            let candidate = prefix + String(character) + ellipsis
+            let candidateWidth = resolvedPriceAxisLabel(
+                context: context,
+                text: candidate,
+                isBaseline: tick.isBaseline
+            ).measure(
+                in: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            ).width
+            guard candidateWidth <= maximumWidth else { break }
+            prefix += String(character)
+        }
+        return prefix.isEmpty ? ellipsis : prefix + ellipsis
     }
 
     private func drawBaselineLine(

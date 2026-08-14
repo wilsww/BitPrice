@@ -322,6 +322,11 @@ Complete
 | A diagnostic command containing `rm -rf build/IconDebug.iconset` was rejected by the execution safety layer | 1 | Used a uniquely named `mktemp` debug directory instead; no project data was removed. |
 | A combined patch expected a duplicated chart-call line that was only an output-display artifact | 1 | Re-read the exact source range and applied the source/test edits against the actual text. |
 
+## UI16 completion
+- The Y-axis left inset is now derived from the actual resolved label widths, with the selected ticks computed first from height and a width-derived 40% cap.
+- Capped labels truncate using the same text/font resolver; no fallback inset constant, precision change, tick-rule change, or plot-bound change was introduced.
+- Strict tests/build and source audits passed. No Aqua GUI session was available for visual confirmation.
+
 ## UI15 completion
 - The baseline is marked by a compact filled diamond and shared-precision value; its tooltip preserves the lost explanatory words without widening the axis or adding an in-plot label.
 - Settings identity now has intrinsic height and sits directly above the closing disclosure, with the existing flexible spacer above and negative layout priority preserved.

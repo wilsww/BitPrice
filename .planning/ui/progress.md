@@ -405,3 +405,18 @@
 - `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, `otool -L`, and bundled icon checks.
 - Forbidden-API/font and scope audits passed. No bundle version keys, tests, icon generator, or non-target source files were changed.
 - No Aqua GUI session was available; desktop review remains necessary for the diamond's glyph rendering, axis spacing at each text size, and bottom-pinning/overflow appearance.
+
+## UI16 session: 2026-08-15
+
+### Phase 35: Measure Y-axis labels and clamp pathological widths
+- **Status:** complete
+- Read the current chart drawing code, domain/test/build context, and planning records before editing.
+- Replaced the guessed 108-point reserve with measured `GraphicsContext.ResolvedText` widths for every selected price tick, including the bold diamond baseline label. Tick selection still uses height first, so no width/height cycle exists.
+- Added a 40%-of-canvas-width clamp. The draw path uses the same label/font resolver and explicitly truncates only when the clamp binds; the value precision, glyph, font, and chart data remain unchanged.
+
+### Phase 36: Verify and record UI16
+- **Status:** complete
+- `bash scripts/run-tests.sh`: 32 passed, 0 failed, 2 expected no-Aqua skips.
+- `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, `otool -L`, and bundled icon checks.
+- Forbidden-API/font and scope audits passed. No pure width test was added because exact measurement is tied to `ResolvedText.measure(in:)`.
+- No Aqua GUI session was available; desktop review remains necessary for measured whitespace and capped-label behavior at Small and Extra Large.
