@@ -119,3 +119,15 @@
 - Entity decoding is deliberately explicit and conservative: recognized entities become their scalar characters, while unknown, malformed, or bare-ampersand text is preserved rather than guessed.
 - Verification passed: 32 tests with 0 failures and 2 expected skips; strict app build; plist/signing/linkage/icon checks; `git diff --check`; and forbidden presentation, shortcut, HTML-importer, and fixed-font audits.
 - No Aqua GUI session exists. A human desktop check is still needed for the warning staying within two lines, card density and scrolling, role-description readability, and Back/Add hit-area/fit at Small and Extra Large.
+
+## UI8: Settings card grouping
+- `SettingsView` is the only required source change. Its existing centered Back/Settings/Quit header, read-only alert binding, segmented text-size picker, footer explanation, error line, and shared preference-sized frame are all retained.
+- Each setting card will have a title, its control, and its explanation. Internal spacing is intentionally compact; the cards are separated by a visibly larger gap so the alert explanation cannot be read as belonging to Text size.
+- The Text size explanation will state only the observable scope: it changes text throughout the panel, and the panel grows with the selected size. No persistence or model behavior changes are needed.
+
+### UI8 implementation tradeoffs and verification
+- The cards use the existing panel font system and a low-opacity secondary tint with rounded corners; no fixed point sizes or `Form` metrics were introduced.
+- Internal card spacing is 6 points with 12 points of padding, while the card-to-card gap is 18 points. The larger external gap is intentional and is the key readability tradeoff.
+- The existing 14-point minimum spacer and shared preference-sized frame remain in place, so Settings does not resize the panel differently from other routes.
+- Verification passed: 32 tests with 0 failures and 2 expected skips; strict app build; plist/signing/linkage/icon checks; `git diff --check`; and forbidden API/font audits.
+- No Aqua GUI session exists. A human desktop check must confirm the cards read as separate settings, the explanatory lines remain attached to the correct controls, and the layout remains comfortable at Small and Extra Large.

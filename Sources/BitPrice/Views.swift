@@ -374,21 +374,42 @@ private struct SettingsView: View {
             }
             .frame(maxWidth: .infinity)
 
-            Toggle("Enable price alerts", isOn: alertsBinding)
-                .panelFont(.headline)
-                .toggleStyle(.switch)
-                .disabled(model.isReadOnly)
-            Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
-                .panelFont(.body)
-                .foregroundStyle(.secondary)
-
-            Picker("Text size", selection: textSizeBinding) {
-                ForEach(TextSizePreference.allCases, id: \.self) { preference in
-                    Text(preference.displayName).tag(preference)
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Price alerts")
+                        .panelFont(.headline)
+                        .foregroundStyle(.secondary)
+                    Toggle("Enable price alerts", isOn: alertsBinding)
+                        .panelFont(.headline)
+                        .toggleStyle(.switch)
+                        .disabled(model.isReadOnly)
+                    Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
+                        .panelFont(.body)
+                        .foregroundStyle(.secondary)
                 }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Text size")
+                        .panelFont(.headline)
+                        .foregroundStyle(.secondary)
+                    Picker("Text size", selection: textSizeBinding) {
+                        ForEach(TextSizePreference.allCases, id: \.self) { preference in
+                            Text(preference.displayName).tag(preference)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .panelFont(.headline)
+                    Text("Scales text throughout the panel; the panel grows with it.")
+                        .panelFont(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             }
-            .pickerStyle(.segmented)
-            .panelFont(.headline)
 
             Spacer(minLength: 14)
 

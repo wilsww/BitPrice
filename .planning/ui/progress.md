@@ -207,3 +207,27 @@
 - Final `git diff --check` and added-line audits found no forbidden presentations, menu shortcuts, `NSAttributedString`, or fixed-size fonts outside `PanelFont`; `NotificationService.swift` is unchanged.
 - No app launch or visual verification was attempted because this host has no Aqua GUI session. Human desktop confirmation remains necessary for warning wrapping, card density, and Back/Add fit at all text-size steps.
 - Wrote `.codex-implement/_codex_impl_summary_ui7.md`.
+
+## UI8 session: 2026-08-14
+
+### Phase 17: Inspect Settings grouping
+- **Status:** in_progress
+- Read the planning skill, current `.planning/ui/` records, and requested repository context.
+- Confirmed `SettingsView` currently places the switch, alert explanation, and segmented text-size picker directly in one flat `VStack`; the header, footer explanation, error line, and shared panel frame are already correct and must remain unchanged.
+- The focused layout will use two explicit rounded cards with smaller internal spacing/padding and a larger inter-card gap, while retaining the existing `Spacer(minLength: 14)` below the cards.
+
+### Phase 17: Implement Settings setting cards
+- **Status:** complete
+- Wrapped Price alerts and Text size in separate neutral rounded-rectangle cards, each with a title, control, explanation, 12-point internal padding, and 6-point internal spacing.
+- Used an 18-point gap between the cards so explanations visually belong to their controls.
+- Added the factual one-line Text size explanation: it scales text throughout the panel and the panel grows with it.
+- Preserved the existing centered header, alert read-only disabling, segmented picker, footer/error lines, shared frame, and `Spacer(minLength: 14)` empty region.
+- No test was added because this is a pure layout change; the existing suite still covers the compiled production view.
+
+### Phase 18: Verify and record UI8
+- **Status:** complete
+- Final `bash scripts/run-tests.sh`: 32 passed, 0 failed, 2 expected no-Aqua skips.
+- Final `bash scripts/build-app.sh`: passed under strict Swift 6 warnings-as-errors; plist lint, codesign verification, `otool -L`, and `Contents/Resources/AppIcon.icns` checks passed.
+- Final added-line audit found none of `sheet(`, `popover(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, `Form {`, or `.system(size:`; the only fixed-size font remains inside `PanelFont`. `NotificationService.swift` is unchanged.
+- No app launch or visual verification was attempted because this host has no Aqua GUI session. A desktop check remains necessary to confirm the two cards read as separate settings and the text-size explanation stays comfortable at all steps.
+- Wrote `.codex-implement/_codex_impl_summary_ui8.md`.

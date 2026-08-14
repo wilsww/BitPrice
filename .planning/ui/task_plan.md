@@ -44,6 +44,23 @@ Complete
 - CoinGecko search identity text is decoded at the REST parsing boundary for named and numeric entities; unknown and bare ampersands remain unchanged.
 - Final build, test, bundle, and source-policy checks passed. No Aqua GUI session was available for visual confirmation.
 
+### Phase 17: Implement Settings setting cards
+- [x] Read current SettingsView and repository verification context
+- [x] Group Price alerts and Text size into padded, subtly tinted cards
+- [x] Add the Text size explanation while preserving existing bindings, header, footer, and empty region
+- **Status:** complete
+
+### Phase 18: Verify and record UI8
+- [x] Run strict build, full tests, bundle checks, and source-policy audits
+- [x] Record the card-spacing decision and no-Aqua limitation
+- [x] Write `.codex-implement/_codex_impl_summary_ui8.md`
+- **Status:** complete
+
+## UI8 completion
+- `SettingsView` now presents separate Price alerts and Text size cards with titled controls, compact internal spacing, and a visibly larger gap between cards.
+- The existing header, bindings, read-only behavior, footer/error lines, shared frame, and empty region remain unchanged.
+- Strict build, existing tests, bundle checks, and source-policy audits passed. No Aqua GUI session was available for visual confirmation.
+
 ### Phase 11: Implement Settings layout, text-size preference, and icon scaling
 - [x] Read the current UI5 sources, planning records, tests, and build scripts
 - [x] Add persisted stable text-size preference with default-medium fallback
