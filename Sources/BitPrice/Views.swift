@@ -19,6 +19,12 @@ struct ChartPriceBounds: Equatable {
     let maximum: Decimal
 }
 
+/// A plotted tick, with the first candle close marked as the chart baseline.
+struct ChartAxisTick: Equatable {
+    let value: Decimal
+    let isBaseline: Bool
+}
+
 private extension TextSizePreference {
     var panelWidth: CGFloat {
         switch self {
@@ -165,6 +171,47 @@ enum ChartAxisCalculator {
         return (0..<tickCount).map { index in
             round(bounds.minimum + step * Decimal(index), fractionDigits: precision)
         }
+    }
+
+    static func axisTicks(
+        for points: [CandlePoint],
+        desiredCount: Int = 4,
+        plotHeight: CGFloat,
+        minimumPixelSeparation: CGFloat
+    ) -> [ChartAxisTick] {
+        let ordinaryTicks = priceTicks(for: points, desiredCount: desiredCount)
+        guard let openingClose = openingClose(for: points),
+              let bounds = priceBounds(for: points) else {
+            return ordinaryTicks.map { ChartAxisTick(value: $0, isBaseline: false) }
+        }
+
+        if bounds.minimum == bounds.maximum {
+            return [ChartAxisTick(value: openingClose, isBaseline: true)]
+        }
+
+        let openingFraction = priceFraction(
+            openingClose,
+            minimum: bounds.minimum,
+            maximum: bounds.maximum
+        )
+        let separationFraction = plotHeight > 0
+            ? Double(max(0, minimumPixelSeparation)) / Double(plotHeight)
+            : 0
+        // The baseline keeps its true position. Ordinary ticks that would put
+        // their labels within roughly one line height are expendable, even at
+        // a series bound where the baseline replaces that bound's tick.
+        let survivingOrdinaryTicks = ordinaryTicks.filter { tick in
+            let tickFraction = priceFraction(
+                tick,
+                minimum: bounds.minimum,
+                maximum: bounds.maximum
+            )
+            return tick != openingClose && abs(tickFraction - openingFraction) >= separationFraction
+        }
+
+        return (survivingOrdinaryTicks.map { ChartAxisTick(value: $0, isBaseline: false) } +
+            [ChartAxisTick(value: openingClose, isBaseline: true)])
+            .sorted { $0.value < $1.value }
     }
 
     static func formattedPrice(_ value: Decimal, fractionDigits: Int) -> String {
@@ -452,6 +499,8 @@ private struct SettingsView: View {
 
             Spacer(minLength: 14)
 
+            appIdentityBlock
+
             Text("Price updates and alerts stop while the app is closed.")
                 .panelFont(.body)
                 .foregroundStyle(.secondary)
@@ -462,6 +511,50 @@ private struct SettingsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var appIdentityBlock: some View {
+        VStack(spacing: 4) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(
+                    width: 80 * PanelFont.multiplier(for: model.persistedState.textSize),
+                    height: 80 * PanelFont.multiplier(for: model.persistedState.textSize)
+                )
+            if let appName {
+                Text(appName)
+                    .panelFont(.headline)
+                    .foregroundStyle(.secondary)
+            }
+            if let versionText {
+                Text(versionText)
+                    .panelFont(.body)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .layoutPriority(-1)
+    }
+
+    private var appName: String? {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String) ??
+            (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String)
+    }
+
+    private var versionText: String? {
+        let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        switch (shortVersion, buildVersion) {
+        case let (shortVersion?, buildVersion?):
+            return "Version \(shortVersion) (\(buildVersion))"
+        case let (shortVersion?, nil):
+            return "Version \(shortVersion)"
+        case let (nil, buildVersion?):
+            return "Build \(buildVersion)"
+        case (nil, nil):
+            return nil
+        }
     }
 
     private var alertsBinding: Binding<Bool> {
@@ -636,7 +729,7 @@ private struct SelectedCoinDetail: View {
             }
 
             if let chart = model.charts[item.id] {
-                Sparkline(series: chart, color: chartColor)
+                Sparkline(series: chart, color: chartColor, baselineColor: chartBaselineColor)
                     .frame(
                         minHeight: Self.minimumChartHeight,
                         maxHeight: chartFillsAvailableHeight ? .infinity : nil
@@ -676,6 +769,14 @@ private struct SelectedCoinDetail: View {
         return .secondary
     }
 
+    private var chartBaselineColor: Color {
+        guard let change = model.quotes[item.id]?.change,
+              case .percent(let value) = change else { return .accentColor }
+        if value > 0 { return .green }
+        if value < 0 { return .red }
+        return .accentColor
+    }
+
     private var mappingDetails: some View {
         Text(mappingSummary)
             .panelFont(.body)
@@ -710,11 +811,11 @@ private struct SelectedCoinDetail: View {
 private struct Sparkline: View {
     let series: ChartSeries
     let color: Color
+    let baselineColor: Color
     @Environment(\.panelTextSize) private var panelTextSize
 
     var body: some View {
         Canvas { context, size in
-            let priceTicks = ChartAxisCalculator.priceTicks(for: series.points)
             let priceBounds = ChartAxisCalculator.priceBounds(for: series.points)
             let pricePrecision = ChartAxisCalculator.pricePrecision(for: series.points)
             let timeTicks = ChartAxisCalculator.timeTicks(for: series.points)
@@ -723,7 +824,10 @@ private struct Sparkline: View {
                   let start = timeTicks.first,
                   let end = timeTicks.last else { return }
 
-            let yAxisWidth: CGFloat = 108
+            let yAxisWidth = max(
+                108,
+                132 * PanelFont.multiplier(for: panelTextSize)
+            )
             let plotRect = CGRect(
                 x: yAxisWidth,
                 y: 14,
@@ -731,6 +835,12 @@ private struct Sparkline: View {
                 height: max(0, size.height - 50)
             )
             guard plotRect.width > 0, plotRect.height > 0 else { return }
+
+            let priceTicks = ChartAxisCalculator.axisTicks(
+                for: series.points,
+                plotHeight: plotRect.height,
+                minimumPixelSeparation: PanelFont.pointSize(for: .body, preference: panelTextSize)
+            )
 
             drawAxes(
                 context: context,
@@ -741,7 +851,8 @@ private struct Sparkline: View {
                 minimumPrice: priceBounds.minimum,
                 maximumPrice: priceBounds.maximum,
                 start: start,
-                end: end
+                end: end,
+                color: baselineColor
             )
             if let openingClose {
                 drawBaselineLine(
@@ -749,7 +860,8 @@ private struct Sparkline: View {
                     plotRect: plotRect,
                     openingClose: openingClose,
                     minimumPrice: priceBounds.minimum,
-                    maximumPrice: priceBounds.maximum
+                    maximumPrice: priceBounds.maximum,
+                    color: baselineColor
                 )
             }
             drawSeries(
@@ -761,16 +873,6 @@ private struct Sparkline: View {
                 end: end,
                 color: color
             )
-            if let openingClose {
-                drawBaselineLabel(
-                    context: context,
-                    plotRect: plotRect,
-                    openingClose: openingClose,
-                    minimumPrice: priceBounds.minimum,
-                    maximumPrice: priceBounds.maximum,
-                    pricePrecision: pricePrecision
-                )
-            }
         }
         .opacity(series.latestRefreshFailed ? 0.45 : 1)
     }
@@ -778,26 +880,36 @@ private struct Sparkline: View {
     private func drawAxes(
         context: GraphicsContext,
         plotRect: CGRect,
-        priceTicks: [Decimal],
+        priceTicks: [ChartAxisTick],
         pricePrecision: Int,
         timeTicks: [Date],
         minimumPrice: Decimal,
         maximumPrice: Decimal,
         start: Date,
-        end: Date
+        end: Date,
+        color: Color
     ) {
         for tick in priceTicks {
-            let fraction = ChartAxisCalculator.priceFraction(tick, minimum: minimumPrice, maximum: maximumPrice)
+            let fraction = ChartAxisCalculator.priceFraction(tick.value, minimum: minimumPrice, maximum: maximumPrice)
             let y = plotRect.maxY - plotRect.height * fraction
-            var gridline = Path()
-            gridline.move(to: CGPoint(x: plotRect.minX, y: y))
-            gridline.addLine(to: CGPoint(x: plotRect.maxX, y: y))
-            context.stroke(gridline, with: .color(.secondary.opacity(0.22)), lineWidth: 1)
+            if !tick.isBaseline {
+                var gridline = Path()
+                gridline.move(to: CGPoint(x: plotRect.minX, y: y))
+                gridline.addLine(to: CGPoint(x: plotRect.maxX, y: y))
+                context.stroke(gridline, with: .color(.secondary.opacity(0.22)), lineWidth: 1)
+            }
 
+            let tickText = ChartAxisCalculator.formattedPrice(tick.value, fractionDigits: pricePrecision)
             let label = context.resolve(
-                Text(ChartAxisCalculator.formattedPrice(tick, fractionDigits: pricePrecision))
-                    .font(PanelFont.scaledFont(.body, preference: panelTextSize))
-                    .foregroundColor(.secondary)
+                Text(tick.isBaseline ? "24h open \(tickText)" : tickText)
+                    .font(
+                        PanelFont.scaledFont(
+                            .body,
+                            weight: tick.isBaseline ? .bold : nil,
+                            preference: panelTextSize
+                        )
+                    )
+                    .foregroundColor(tick.isBaseline ? color : .secondary)
             )
             context.draw(label, at: CGPoint(x: plotRect.minX - 9, y: y), anchor: .trailing)
         }
@@ -837,7 +949,8 @@ private struct Sparkline: View {
         plotRect: CGRect,
         openingClose: Decimal,
         minimumPrice: Decimal,
-        maximumPrice: Decimal
+        maximumPrice: Decimal,
+        color: Color
     ) {
         let fraction = ChartAxisCalculator.priceFraction(
             openingClose,
@@ -850,48 +963,8 @@ private struct Sparkline: View {
         baseline.addLine(to: CGPoint(x: plotRect.maxX, y: y))
         context.stroke(
             baseline,
-            with: .color(.secondary.opacity(0.5)),
+            with: .color(color.opacity(0.7)),
             style: StrokeStyle(lineWidth: 1, dash: [4, 3])
-        )
-    }
-
-    private func drawBaselineLabel(
-        context: GraphicsContext,
-        plotRect: CGRect,
-        openingClose: Decimal,
-        minimumPrice: Decimal,
-        maximumPrice: Decimal,
-        pricePrecision: Int
-    ) {
-        let fraction = ChartAxisCalculator.priceFraction(
-            openingClose,
-            minimum: minimumPrice,
-            maximum: maximumPrice
-        )
-        let y = plotRect.maxY - plotRect.height * fraction
-        let label = context.resolve(
-            Text("24h chart open · \(ChartAxisCalculator.formattedPrice(openingClose, fractionDigits: pricePrecision))")
-                .font(PanelFont.scaledFont(.body, preference: panelTextSize))
-                .foregroundColor(.secondary)
-        )
-        let nearTop = y <= plotRect.minY + 18
-        let nearBottom = y >= plotRect.maxY - 18
-        let labelY: CGFloat
-        let anchor: UnitPoint
-        if nearTop {
-            labelY = plotRect.minY + 3
-            anchor = .topLeading
-        } else if nearBottom {
-            labelY = plotRect.maxY - 3
-            anchor = .bottomLeading
-        } else {
-            labelY = y - 4
-            anchor = .bottomLeading
-        }
-        context.draw(
-            label,
-            at: CGPoint(x: plotRect.minX + 6, y: labelY),
-            anchor: anchor
         )
     }
 

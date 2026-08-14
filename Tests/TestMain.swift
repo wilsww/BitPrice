@@ -701,6 +701,58 @@ struct BitPriceTests {
                     ChartAxisCalculator.priceTicks(for: normal) == [10, 20, 30, 40],
                     "normal price range ticks do not span the actual minimum and maximum"
                 )
+                let farBaseline = [
+                    CandlePoint(bucketStart: start, close: 25),
+                    CandlePoint(bucketStart: start.addingTimeInterval(1_800), close: 10),
+                    CandlePoint(bucketStart: start.addingTimeInterval(3_600), close: 20),
+                    CandlePoint(bucketStart: start.addingTimeInterval(5_400), close: 30),
+                    CandlePoint(bucketStart: start.addingTimeInterval(7_200), close: 40)
+                ]
+                let farAxisTicks = ChartAxisCalculator.axisTicks(
+                    for: farBaseline,
+                    plotHeight: 100,
+                    minimumPixelSeparation: 8
+                )
+                try expect(
+                    farAxisTicks.map(\.value) == [10, 20, 25, 30, 40] &&
+                        farAxisTicks.filter(\.isBaseline).map(\.value) == [25],
+                    "far baseline did not preserve all ordinary ticks and its own tick"
+                )
+
+                let collidingBaseline = [
+                    CandlePoint(bucketStart: start, close: 21),
+                    CandlePoint(bucketStart: start.addingTimeInterval(1_800), close: 10),
+                    CandlePoint(bucketStart: start.addingTimeInterval(3_600), close: 20),
+                    CandlePoint(bucketStart: start.addingTimeInterval(5_400), close: 30),
+                    CandlePoint(bucketStart: start.addingTimeInterval(7_200), close: 40)
+                ]
+                let collidingAxisTicks = ChartAxisCalculator.axisTicks(
+                    for: collidingBaseline,
+                    plotHeight: 100,
+                    minimumPixelSeparation: 8
+                )
+                try expect(
+                    collidingAxisTicks.map(\.value) == [10, 21, 30, 40] &&
+                        collidingAxisTicks.filter(\.isBaseline).map(\.value) == [21],
+                    "colliding ordinary tick was not dropped in favor of the baseline"
+                )
+
+                let minimumBaseline = [
+                    CandlePoint(bucketStart: start, close: 10),
+                    CandlePoint(bucketStart: start.addingTimeInterval(1_800), close: 20),
+                    CandlePoint(bucketStart: start.addingTimeInterval(3_600), close: 30),
+                    CandlePoint(bucketStart: start.addingTimeInterval(5_400), close: 40)
+                ]
+                let minimumAxisTicks = ChartAxisCalculator.axisTicks(
+                    for: minimumBaseline,
+                    plotHeight: 100,
+                    minimumPixelSeparation: 8
+                )
+                try expect(
+                    minimumAxisTicks.map(\.value) == [10, 20, 30, 40] &&
+                        minimumAxisTicks.first?.isBaseline == true,
+                    "minimum baseline did not replace the coincident bound tick"
+                )
                 let ondo = [
                     CandlePoint(bucketStart: start, close: Decimal(string: "0.3268")!),
                     CandlePoint(bucketStart: start.addingTimeInterval(1_800), close: Decimal(string: "0.3306666667")!),
@@ -785,6 +837,15 @@ struct BitPriceTests {
                 try expect(
                     ChartAxisCalculator.priceTicks(for: flat) == [Decimal(string: "0.33")!],
                     "flat price range did not collapse to one truthful tick"
+                )
+                let flatAxisTicks = ChartAxisCalculator.axisTicks(
+                    for: flat,
+                    plotHeight: 100,
+                    minimumPixelSeparation: 8
+                )
+                try expect(
+                    flatAxisTicks == [ChartAxisTick(value: Decimal(string: "0.33")!, isBaseline: true)],
+                    "flat baseline did not remain the single axis tick"
                 )
                 try expect(
                     ChartAxisCalculator.priceFraction(

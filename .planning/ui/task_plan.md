@@ -174,6 +174,25 @@ Complete
 - Small-size glyph rendering uses a proportional branch with a 1.6-pixel minimum stroke at 16×16. All ten ICNS renditions decoded, and 16×16/32×32 pixel checks passed.
 - Strict app build/tests and source-scope audits passed. No GUI session was available to judge the final system-icon balance.
 
+### Phase 31: Implement baseline axis tick and Settings app identity
+- [x] Move the first-close baseline label from the plot into the Y-axis tick column
+- [x] Suppress colliding ordinary ticks without nudging labels or changing true plot bounds
+- [x] Add the runtime app icon and conditional bundle-derived identity block to Settings
+- [x] Extend axis tests for far, colliding, minimum-bound, and flat baselines
+- **Status:** complete
+
+### Phase 32: Verify and record UI14
+- [x] Run the strict test/build scripts and confirm bundle resources/checks
+- [x] Audit forbidden APIs, fixed-font placement, baseline source, and icon source
+- [x] Record collision behavior, flexible Settings decoration, and no-Aqua limitations
+- [x] Write `.codex-implement/_codex_impl_summary_ui14.md`
+- **Status:** complete
+
+## UI14 completion
+- The baseline is now a true, shared-precision Y-axis tick with bold/color/`24h open` cues; ordinary ticks near it are dropped, including coincident bound ticks.
+- Settings shows the running bundle icon and only available bundle name/version fields in the existing dead space, with lower layout priority than real settings content.
+- Tests/build and scope audits pass. Human desktop confirmation remains required because this host has no Aqua GUI session.
+
 
 
 ### Phase 11: Implement Settings layout, text-size preference, and icon scaling

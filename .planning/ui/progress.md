@@ -375,3 +375,18 @@
 - `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors; plist lint, codesign verification, linkage, and `Contents/Resources/AppIcon.icns` checks passed.
 - An initial verification command was rejected because its cleanup trap contained `rm -rf`; it did not change repository content. The same verification was rerun without cleanup and passed, leaving only a temporary directory under `/tmp`.
 - `Sources/` and `scripts/make-icon.sh` are unchanged. No GUI was available to judge whether the squircle, orange hue, and glyph balance match current macOS icon aesthetics.
+
+## UI14 session: 2026-08-15
+
+### Phase 31: Move the chart baseline onto the Y axis
+- **Status:** complete
+- Read the current chart axis, baseline, Settings, test, persistence, alert, app-entry, and build/test context before editing.
+- Added `ChartAxisTick` and a pure axis-tick helper. It preserves ordinary rounded ticks, inserts the first-close baseline at its true value, and drops only ordinary ticks within the supplied one-line pixel separation.
+- Replaced the floating baseline label with a bold, colored `24h open <shared-precision-value>` Y-axis label. The dashed line remains at the first close and is drawn behind the unchanged segment fill/stroke.
+- Added assertions for all ordinary ticks surviving, collision suppression, a minimum-bound baseline, and a flat series baseline.
+
+### Phase 32: Add runtime app identity to Settings and verify UI14
+- **Status:** complete
+- Added the running app icon via `Image(nsImage: NSApplication.shared.applicationIconImage)` and conditional bundle-derived name/version text above the existing closing disclosure. The flexible low-priority block gives way before the real Settings content.
+- Re-ran the direct Swift 6 test/build paths after correcting the labeled `PanelFont.pointSize(for:)` call and giving a neutral zero-change baseline the accent color. Tests passed 32/32 with the two expected no-Aqua skips; the strict app build passed with plist, signing, linkage, and icon checks.
+- No Aqua session was available. Desktop review remains necessary for axis-label width/readability at Extra Large, baseline color/line relationship, and the final Settings icon block balance.
