@@ -65,3 +65,17 @@
 - The normal-size row budget is approximately 240 points for star/symbol/quote/status, 170 for a price such as `63,824.73`, 105 for `+12.34%` plus `Alert`, and 24 for inter-column spacing. That totals 539 points before list insets, leaving useful slack inside the 628-point padded content width.
 - The larger 660×780 panel is a layout tradeoff: it keeps the normal-size six-character-symbol row and the 200-point axis plot readable, while the watch list and detail remain independently scrollable for more rows or larger system text.
 - No Aqua session is available. Axis-label clipping/overlap in every locale, the perceived active/dim star contrast, longest-row fit, panel fit on smaller displays, and large-Dynamic-Type interaction still require human desktop confirmation.
+
+## UI4: settings, global alerts, and tick precision
+- `PanelRoute` currently has inline list/add/alert/confirm-quit routes; the existing quit confirmation must be removed and Settings must be another inline route so the `.window` panel never presents a separate surface.
+- The persisted model is v1 and `PersistedState.bitcoinSeed()`, `V1StateDTO`, and the manual DTO conversion functions are the complete persistence path. `alertsEnabled` must be optional on decode with a `true` default and always encoded without changing `currentSchemaVersion`.
+- Alert evaluation is called from both Binance and Coinbase quote paths through `evaluateAlert`; the global switch belongs at the first guard in that method, before `AlertEngine.evaluate`, and must not mutate alert latch state while disabled.
+- The chart currently uses `priceTicks` both as labels and as the price bounds passed to `priceFraction`. UI4 must return/retain real min/max separately and use a span-derived rounded precision for labels/gridlines so the 0.33 and 63,824 scales remain readable without clipping points.
+- Existing tests compile production `Views.swift` and exercise `ChartAxisCalculator`; the new pure helpers and model persistence/alert behavior can be tested without an Aqua session.
+
+### UI4 implementation tradeoffs and verification
+- Axis precision is derived from the linear tick interval, targeting readable significant digits and increasing precision until the rounded ticks remain distinct. A fixed formatter precision makes every label in the axis agree, including tight large-price ranges.
+- `ChartPriceBounds` is deliberately separate from `priceTicks`: rounded values position reference gridlines, while real bounds are passed to both `priceFraction` calls for the series and the gridline fraction.
+- The global toggle uses the existing synchronous full-state edit path, so it gets the same durable-write and read-only protection as other settings without changing any feed or task lifecycle code. Turning it on only changes the next quote evaluation; it does not re-arm or add a grace period.
+- Verification passed: `bash scripts/build-app.sh`; `bash scripts/run-tests.sh` (28 passed, 0 failed, 2 expected skips); `plutil -lint`; `codesign --verify`; `otool -L`; icon resource presence; `git diff --check`; and added-line forbidden-API/concurrency/build audits.
+- No Aqua GUI session exists on this host. A human desktop check is still needed for actual panel appearance, Settings/Done/Quit interaction, off-state contrast, row/editor text fit, axis label placement/localization, and menu-bar/panel behavior.

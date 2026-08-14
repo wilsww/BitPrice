@@ -53,6 +53,7 @@ struct PersistedState: Codable, Equatable, Sendable {
     let schemaVersion: Int
     var items: [WatchItem]
     var primaryItemID: UUID?
+    var alertsEnabled: Bool = true
 
     static func bitcoinSeed(id: UUID = UUID()) -> PersistedState {
         let binance = VenueMapping(
@@ -78,7 +79,12 @@ struct PersistedState: Codable, Equatable, Sendable {
             coinbaseMapping: coinbase,
             alert: nil
         )
-        return PersistedState(schemaVersion: currentSchemaVersion, items: [item], primaryItemID: id)
+        return PersistedState(
+            schemaVersion: currentSchemaVersion,
+            items: [item],
+            primaryItemID: id,
+            alertsEnabled: true
+        )
     }
 }
 

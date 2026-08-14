@@ -108,3 +108,30 @@
 - No GUI launch or visual verification was attempted because this host has no Aqua session.
 - One combined patch failed because copied diagnostic output appeared to duplicate a chart-call line; re-reading the exact range showed the source was correct, and the patch was reapplied to the actual text.
 - Wrote `.codex-implement/_codex_impl_summary_ui3.md`.
+
+## UI4 session: 2026-08-14
+
+### Phase 9: Inspect requirements and current implementation
+- **Status:** in_progress
+- Read the planning skill and restored the existing `.planning/ui/` records.
+- Confirmed the worktree is clean and the requested implementation is concentrated in the existing inline panel, `AppModel`, v1 persistence DTO/domain conversions, and direct test harness.
+- Confirmed the current quit confirmation route, alert call site, axis bounds coupling, and existing test/build architecture from the requested source files.
+
+### Phase 9: Implement settings, global alert gate, and precise chart ticks
+- **Status:** complete
+- Added an inline `.settings` route with a gear header control, Done return, global alert toggle, immediate destructive Quit BitPrice action, and the existing closed-app explanation.
+- Persisted root-level `alertsEnabled` through `PersistedState`, v1 DTO decode/encode, migrations, and store/domain conversion without changing schema version; missing v1 keys default to `true`.
+- Gated `AppModel.evaluateAlert` before `AlertEngine.evaluate`, marked globally-off row/editor states, and added next-tick re-enable behavior coverage.
+- Added span-derived, uniqueness-preserving tick precision and separated rounded gridline values from real chart bounds used by `priceFraction`.
+- Added tests for absent-v1 defaulting/encoding, suspended alert evaluation, ONDO-scale ticks/bounds, and 63,824-scale precision/formatting.
+- `bash scripts/run-tests.sh` passed: 28 passed, 0 failed, 2 expected no-Aqua skips. `git diff --check` passed.
+
+### Phase 10: Verify and record UI4
+- **Status:** complete
+- `bash scripts/build-app.sh` exited 0 with strict Swift 6 warnings-as-errors; bundle plist lint, ad-hoc signing verification, and `otool -L` passed.
+- `Contents/Resources/AppIcon.icns` remains present and recognized as a macOS icon.
+- The added-line audit found none of `sheet(`, `popover(`, `alert(`, `confirmationDialog(`, `NSAlert`, `Settings {`, or `keyboardShortcut`; no forbidden concurrency/build additions were found.
+- `NotificationService.swift` is unchanged. No networking, lifecycle, threshold, hysteresis, cooldown, or concurrency contract was intentionally changed.
+- Final `bash scripts/run-tests.sh`: 28 passed, 0 failed, 2 expected no-Aqua skips.
+- No app launch or visual verification was attempted because the host has no Aqua GUI session.
+- Wrote `.codex-implement/_codex_impl_summary_ui4.md`.

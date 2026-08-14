@@ -11,7 +11,12 @@ enum PanelRoute: Equatable {
     case list
     case add
     case alert(WatchItem.ID)
-    case confirmQuit
+    case settings
+}
+
+struct ChartPriceBounds: Equatable {
+    let minimum: Decimal
+    let maximum: Decimal
 }
 
 /// Presentation-only axis values derived from the chart points themselves.
@@ -19,16 +24,53 @@ enum PanelRoute: Equatable {
 /// Keeping this calculation separate from drawing makes the flat and sparse
 /// cases explicit and lets the acceptance tests cover them without a GUI.
 enum ChartAxisCalculator {
-    static func priceTicks(for points: [CandlePoint], desiredCount: Int = 4) -> [Decimal] {
+    static func priceBounds(for points: [CandlePoint]) -> ChartPriceBounds? {
         guard let minimum = points.map(\.close).min(),
-              let maximum = points.map(\.close).max() else { return [] }
-        guard minimum != maximum else { return [minimum] }
+              let maximum = points.map(\.close).max() else { return nil }
+        return ChartPriceBounds(minimum: minimum, maximum: maximum)
+    }
+
+    static func pricePrecision(for points: [CandlePoint], desiredCount: Int = 4) -> Int {
+        guard let bounds = priceBounds(for: points) else { return 0 }
+        guard bounds.minimum != bounds.maximum else {
+            return decimalFractionDigits(bounds.minimum)
+        }
+        let tickCount = min(5, max(3, desiredCount))
+        let step = (bounds.maximum - bounds.minimum) / Decimal(tickCount - 1)
+        let stepDouble = abs(NSDecimalNumber(decimal: step).doubleValue)
+        guard stepDouble.isFinite, stepDouble > 0 else { return 0 }
+
+        var precision = max(0, Int(ceil(-log10(stepDouble))) + 1)
+        let rawTicks = (0..<tickCount).map { index in
+            bounds.minimum + step * Decimal(index)
+        }
+        while precision < 12 {
+            let rounded = rawTicks.map { round($0, fractionDigits: precision) }
+            if Set(rounded).count == rounded.count { break }
+            precision += 1
+        }
+        return precision
+    }
+
+    static func priceTicks(for points: [CandlePoint], desiredCount: Int = 4) -> [Decimal] {
+        guard let bounds = priceBounds(for: points) else { return [] }
+        guard bounds.minimum != bounds.maximum else { return [bounds.minimum] }
 
         let tickCount = min(5, max(3, desiredCount))
-        let step = (maximum - minimum) / Decimal(tickCount - 1)
+        let step = (bounds.maximum - bounds.minimum) / Decimal(tickCount - 1)
+        let precision = pricePrecision(for: points, desiredCount: desiredCount)
         return (0..<tickCount).map { index in
-            index == tickCount - 1 ? maximum : minimum + step * Decimal(index)
+            round(bounds.minimum + step * Decimal(index), fractionDigits: precision)
         }
+    }
+
+    static func formattedPrice(_ value: Decimal, fractionDigits: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = true
+        formatter.minimumFractionDigits = fractionDigits
+        formatter.maximumFractionDigits = fractionDigits
+        return formatter.string(from: NSDecimalNumber(decimal: value)) ?? decimalString(value)
     }
 
     static func timeTicks(for points: [CandlePoint]) -> [Date] {
@@ -61,6 +103,19 @@ enum ChartAxisCalculator {
         guard duration != 0 else { return 0.5 }
         return value.timeIntervalSince(start) / duration
     }
+
+    private static func round(_ value: Decimal, fractionDigits: Int) -> Decimal {
+        var source = value
+        var result = Decimal()
+        NSDecimalRound(&result, &source, fractionDigits, .plain)
+        return result
+    }
+
+    private static func decimalFractionDigits(_ value: Decimal) -> Int {
+        let text = decimalString(value)
+        guard let separator = text.firstIndex(of: ".") else { return 0 }
+        return text.distance(from: text.index(after: separator), to: text.endIndex)
+    }
 }
 
 struct ContentView: View {
@@ -82,8 +137,8 @@ struct ContentView: View {
                     // The item was removed while its editor was open.
                     Color.clear.onAppear { route = .list }
                 }
-            case .confirmQuit:
-                QuitConfirmationView { route = .list }
+            case .settings:
+                SettingsView(model: model) { route = .list }
             }
         }
         .padding(16)
@@ -95,14 +150,6 @@ struct ContentView: View {
     private var listContent: some View {
         VStack(spacing: 10) {
             HStack {
-                // LSUIElement hides the Dock icon and the app menu, so the panel
-                // carries the only quit affordance the user has. Quitting is
-                // routed through a second inline step to prevent stray exits.
-                Button { route = .confirmQuit } label: {
-                    Image(systemName: "power")
-                }
-                .font(.title3)
-                .help("Quit BitPrice")
                 Text("BitPrice").font(.title3.bold())
                 if let presentation = model.aggregatePresentation {
                     Text(presentation.rawValue)
@@ -113,6 +160,9 @@ struct ContentView: View {
                 Button { route = .add } label: { Image(systemName: "plus") }
                     .font(.title3)
                     .disabled(model.isReadOnly || model.items.count >= maximumWatchlistCount)
+                Button { route = .settings } label: { Image(systemName: "gearshape") }
+                    .font(.title3)
+                    .help("Settings")
             }
             if let recovery = model.recoveryMessage {
                 BannerView(text: recovery, color: .orange)
@@ -195,30 +245,55 @@ struct ContentView: View {
     }
 }
 
-private struct QuitConfirmationView: View {
-    let cancel: () -> Void
+private struct SettingsView: View {
+    @ObservedObject var model: AppModel
+    let close: () -> Void
+    @State private var localError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Quit BitPrice?")
-                .font(.title.bold())
-            Text("Price updates and alerts stop while the app is closed.")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 16) {
-                Button("Cancel", action: cancel)
-                    .buttonStyle(.bordered)
-                Button(role: .destructive) {
-                    NSApplication.shared.terminate(nil)
-                } label: {
-                    Text("Quit")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Settings")
+                    .font(.title2.bold())
+                Spacer()
+                Button("Done", action: close)
+                    .font(.headline)
             }
-            .padding(.top, 8)
+
+            Toggle("Enable price alerts", isOn: alertsBinding)
+                .font(.headline)
+                .disabled(model.isReadOnly)
+            Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 14)
+
+            Button("Quit BitPrice", role: .destructive) {
+                NSApplication.shared.terminate(nil)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+            Text("Price updates and alerts stop while the app is closed.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+            if let localError {
+                Text(localError)
+                    .font(.body)
+                    .foregroundStyle(.red)
+            }
         }
-        .frame(maxWidth: 380, maxHeight: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var alertsBinding: Binding<Bool> {
+        Binding(
+            get: { model.alertsEnabled },
+            set: { enabled in
+                do { try model.setAlertsEnabled(enabled) }
+                catch { localError = error.localizedDescription }
+            }
+        )
     }
 }
 
@@ -293,9 +368,13 @@ private struct WatchRow: View {
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
-                Button("Alert", action: editAlert)
-                    .buttonStyle(.borderless)
-                    .font(.headline)
+                Button(action: editAlert) {
+                    Text(model.alertsEnabled ? "Alert" : "Alert · Off")
+                        .font(.headline)
+                        .foregroundStyle(model.alertsEnabled ? .primary : .secondary)
+                        .strikethrough(!model.alertsEnabled)
+                }
+                .buttonStyle(.borderless)
             }
             .frame(width: 105, alignment: .trailing)
         }
@@ -416,9 +495,10 @@ private struct Sparkline: View {
     var body: some View {
         Canvas { context, size in
             let priceTicks = ChartAxisCalculator.priceTicks(for: series.points)
+            let priceBounds = ChartAxisCalculator.priceBounds(for: series.points)
+            let pricePrecision = ChartAxisCalculator.pricePrecision(for: series.points)
             let timeTicks = ChartAxisCalculator.timeTicks(for: series.points)
-            guard let minimumPrice = priceTicks.first,
-                  let maximumPrice = priceTicks.last,
+            guard let priceBounds,
                   let start = timeTicks.first,
                   let end = timeTicks.last else { return }
 
@@ -435,17 +515,18 @@ private struct Sparkline: View {
                 context: context,
                 plotRect: plotRect,
                 priceTicks: priceTicks,
+                pricePrecision: pricePrecision,
                 timeTicks: timeTicks,
-                minimumPrice: minimumPrice,
-                maximumPrice: maximumPrice,
+                minimumPrice: priceBounds.minimum,
+                maximumPrice: priceBounds.maximum,
                 start: start,
                 end: end
             )
             drawSeries(
                 context: context,
                 plotRect: plotRect,
-                minimumPrice: minimumPrice,
-                maximumPrice: maximumPrice,
+                minimumPrice: priceBounds.minimum,
+                maximumPrice: priceBounds.maximum,
                 start: start,
                 end: end
             )
@@ -457,6 +538,7 @@ private struct Sparkline: View {
         context: GraphicsContext,
         plotRect: CGRect,
         priceTicks: [Decimal],
+        pricePrecision: Int,
         timeTicks: [Date],
         minimumPrice: Decimal,
         maximumPrice: Decimal,
@@ -472,7 +554,7 @@ private struct Sparkline: View {
             context.stroke(gridline, with: .color(.secondary.opacity(0.22)), lineWidth: 1)
 
             let label = context.resolve(
-                Text(AppModel.formatPrice(tick))
+                Text(ChartAxisCalculator.formattedPrice(tick, fractionDigits: pricePrecision))
                     .font(.body)
                     .foregroundColor(.secondary)
             )
@@ -758,6 +840,11 @@ private struct AlertEditorView: View {
                 Button("Cancel", action: close)
             }
             Toggle("Enabled", isOn: $enabled)
+            if !model.alertsEnabled {
+                Text("Alerts are globally off. This alert will not fire until they are re-enabled.")
+                    .font(.body)
+                    .foregroundStyle(.orange)
+            }
             // Segmented style renders inline; a menu-style Picker would take key
             // status from the MenuBarExtra window and dismiss the panel.
             Picker("Direction", selection: $direction) {

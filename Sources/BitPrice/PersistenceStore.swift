@@ -71,17 +71,20 @@ struct V1StateDTO: Codable, Equatable, Sendable {
     let schemaVersion: Int
     let items: [V1ItemDTO]
     let primaryItemID: UUID?
+    let alertsEnabled: Bool
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion
         case items
         case primaryItemID
+        case alertsEnabled
     }
 
-    init(schemaVersion: Int, items: [V1ItemDTO], primaryItemID: UUID?) {
+    init(schemaVersion: Int, items: [V1ItemDTO], primaryItemID: UUID?, alertsEnabled: Bool = true) {
         self.schemaVersion = schemaVersion
         self.items = items
         self.primaryItemID = primaryItemID
+        self.alertsEnabled = alertsEnabled
     }
 
     init(from decoder: any Decoder) throws {
@@ -89,6 +92,7 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
         items = try container.decode([V1ItemDTO].self, forKey: .items)
         primaryItemID = try container.decodeIfPresent(UUID.self, forKey: .primaryItemID)
+        alertsEnabled = try container.decodeIfPresent(Bool.self, forKey: .alertsEnabled) ?? true
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -100,6 +104,7 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         } else {
             try container.encodeNil(forKey: .primaryItemID)
         }
+        try container.encode(alertsEnabled, forKey: .alertsEnabled)
     }
 }
 
@@ -127,7 +132,8 @@ func migrateV0ToV1(_ old: V0StateDTO) -> V1StateDTO {
                 }
             )
         },
-        primaryItemID: old.primaryItemID
+        primaryItemID: old.primaryItemID,
+        alertsEnabled: true
     )
 }
 
@@ -275,7 +281,8 @@ final class PersistenceStore {
                     }
                 )
             },
-            primaryItemID: state.primaryItemID
+            primaryItemID: state.primaryItemID,
+            alertsEnabled: state.alertsEnabled
         )
     }
 
@@ -308,7 +315,8 @@ final class PersistenceStore {
                     }
                 )
             },
-            primaryItemID: dto.primaryItemID
+            primaryItemID: dto.primaryItemID,
+            alertsEnabled: dto.alertsEnabled
         )
     }
 

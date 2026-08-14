@@ -284,6 +284,26 @@ struct BitPriceTests {
                 guard case .loaded(let fixtureState) = v1Store.load() else { throw TestFailure(description: "canonical v1 fixture failed") }
                 try expect(fixtureState.items[0].alert?.threshold == Decimal(string: "100000.25"), "decimal string changed")
             },
+            AcceptanceTest(name: "06b v1 without global alert flag defaults on") {
+                let fixture = try Data(contentsOf: URL(fileURLWithPath: "Tests/Fixtures/watchlist-v1.json"))
+                guard var object = try JSONSerialization.jsonObject(with: fixture) as? [String: Any] else {
+                    throw TestFailure(description: "v1 fixture was not a JSON object")
+                }
+                object.removeValue(forKey: "alertsEnabled")
+                let legacyV1 = try JSONSerialization.data(withJSONObject: object)
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                try legacyV1.write(to: root.appendingPathComponent("watchlist.json"))
+                let store = try PersistenceStore(rootDirectory: root)
+                guard case .loaded(let state) = store.load() else {
+                    throw TestFailure(description: "v1 without alertsEnabled entered recovery")
+                }
+                try expect(state.alertsEnabled, "absent alertsEnabled did not default to on")
+                try expect(!store.recoveryProtected, "valid v1 without alertsEnabled was protected")
+                let encoded = try store.encodedData(for: state)
+                let encodedObject = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+                try expect(encodedObject?["alertsEnabled"] as? Bool == true, "alertsEnabled was not encoded")
+            },
             AcceptanceTest(name: "07 future unregistered-older dispatch path") {
                 try expect(schemaDispatch(version: 1, current: 2, registeredVersions: [0, 2]) == .unregisteredOlder,
                            "unregistered older path missing")
@@ -526,6 +546,63 @@ struct BitPriceTests {
                            "notification boundary count wrong")
                 model.shutdown()
             },
+            AcceptanceTest(name: "21b global alerts suspend evaluation and fire after re-enable") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let lock = try ProcessLock(rootDirectory: root)
+                let store = try PersistenceStore(rootDirectory: root)
+                let parts = controllerParts()
+                let wall = FixedWallClock(value: Date(timeIntervalSince1970: 3_000))
+                let model = AppModel(
+                    persistenceStore: store,
+                    processLock: lock,
+                    restClients: clients(transport: StubHTTPTransport([])),
+                    feedController: parts.controller,
+                    notifications: FakeNotifications(),
+                    wallClock: wall,
+                    continuousClock: FixedContinuousClock(),
+                    suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false,
+                    observeSleepWake: false
+                )
+                let itemID = model.items[0].id
+                try model.saveAlert(
+                    itemID: itemID,
+                    proposed: PriceAlert(
+                        direction: .above,
+                        threshold: 10,
+                        cooldownSeconds: 0,
+                        hysteresisPercent: 0,
+                        isEnabled: true,
+                        isArmed: true,
+                        lastFiredAt: nil
+                    )
+                )
+                try model.setAlertsEnabled(false)
+                model.feedDidAccept(BinanceTick(
+                    productID: "BTCUSDT",
+                    price: 11,
+                    changePercent: 1,
+                    eventDate: wall.now(),
+                    receivedInstant: FixedContinuousClock().now()
+                ))
+                let disabledAlert = model.items[0].alert
+                try expect(!model.alertsEnabled, "global alert switch did not turn off")
+                try expect(disabledAlert?.isArmed == true && disabledAlert?.lastFiredAt == nil,
+                           "disabled alert evaluation changed latch state")
+
+                try model.setAlertsEnabled(true)
+                model.feedDidAccept(BinanceTick(
+                    productID: "BTCUSDT",
+                    price: 11,
+                    changePercent: 1,
+                    eventDate: wall.now(),
+                    receivedInstant: FixedContinuousClock().now()
+                ))
+                try expect(model.items[0].alert?.isArmed == false && model.items[0].alert?.lastFiredAt != nil,
+                           "re-enabled alert did not fire on the next tick")
+                model.shutdown()
+            },
             AcceptanceTest(name: "22 presentation formatting") {
                 try expect(AppModel.formatPrice(Decimal(string: "1234.5")!) == "1,234.50", "price formatting")
                 try expect(AppModel.formatChange(.unavailable) == "—", "unavailable change fabricated")
@@ -572,6 +649,70 @@ struct BitPriceTests {
                 try expect(
                     ChartAxisCalculator.priceTicks(for: normal) == [10, 20, 30, 40],
                     "normal price range ticks do not span the actual minimum and maximum"
+                )
+                let ondo = [
+                    CandlePoint(bucketStart: start, close: Decimal(string: "0.3268")!),
+                    CandlePoint(bucketStart: start.addingTimeInterval(1_800), close: Decimal(string: "0.3306666667")!),
+                    CandlePoint(bucketStart: start.addingTimeInterval(3_600), close: Decimal(string: "0.3345333333")!),
+                    CandlePoint(bucketStart: start.addingTimeInterval(5_400), close: Decimal(string: "0.3384")!)
+                ]
+                try expect(ChartAxisCalculator.pricePrecision(for: ondo) == 4, "ONDO span selected the wrong precision")
+                try expect(
+                    ChartAxisCalculator.priceTicks(for: ondo) == [
+                        Decimal(string: "0.3268")!,
+                        Decimal(string: "0.3307")!,
+                        Decimal(string: "0.3345")!,
+                        Decimal(string: "0.3384")!
+                    ],
+                    "ONDO ticks were not rounded to one shared precision"
+                )
+                try expect(
+                    ChartAxisCalculator.priceBounds(for: ondo) == ChartPriceBounds(
+                        minimum: Decimal(string: "0.3268")!, maximum: Decimal(string: "0.3384")!
+                    ),
+                    "ONDO plot bounds were rounded instead of retaining the true range"
+                )
+                try expect(
+                    ChartAxisCalculator.priceFraction(Decimal(string: "0.3268")!, minimum: 0.3268, maximum: 0.3384) == 0 &&
+                    ChartAxisCalculator.priceFraction(Decimal(string: "0.3384")!, minimum: 0.3268, maximum: 0.3384) == 1,
+                    "ONDO plot range did not span true min and max"
+                )
+
+                let bitcoinScale = [
+                    CandlePoint(bucketStart: start, close: Decimal(string: "63824.731")!),
+                    CandlePoint(bucketStart: start.addingTimeInterval(1_800), close: Decimal(string: "63824.931")!),
+                    CandlePoint(bucketStart: start.addingTimeInterval(3_600), close: Decimal(string: "63825.131")!),
+                    CandlePoint(bucketStart: start.addingTimeInterval(5_400), close: Decimal(string: "63825.329")!)
+                ]
+                try expect(ChartAxisCalculator.pricePrecision(for: bitcoinScale) == 2,
+                           "63,824 span selected the wrong precision")
+                try expect(
+                    ChartAxisCalculator.priceTicks(for: bitcoinScale) == [
+                        Decimal(string: "63824.73")!,
+                        Decimal(string: "63824.93")!,
+                        Decimal(string: "63825.13")!,
+                        Decimal(string: "63825.33")!
+                    ],
+                    "63,824 ticks collapsed or lost their shared precision"
+                )
+                try expect(
+                    ChartAxisCalculator.priceBounds(for: bitcoinScale) == ChartPriceBounds(
+                        minimum: Decimal(string: "63824.731")!, maximum: Decimal(string: "63825.329")!
+                    ),
+                    "63,824 plot bounds were rounded instead of retaining the true range"
+                )
+                try expect(
+                    ChartAxisCalculator.priceFraction(
+                        Decimal(string: "63824.731")!, minimum: Decimal(string: "63824.731")!, maximum: Decimal(string: "63825.329")!
+                    ) == 0 &&
+                    ChartAxisCalculator.priceFraction(
+                        Decimal(string: "63825.329")!, minimum: Decimal(string: "63824.731")!, maximum: Decimal(string: "63825.329")!
+                    ) == 1,
+                    "63,824 plot range did not span true min and max"
+                )
+                try expect(
+                    ChartAxisCalculator.formattedPrice(Decimal(string: "63824.73")!, fractionDigits: 2) == "63,824.73",
+                    "large-scale axis label formatting lost its precision"
                 )
                 try expect(
                     ChartAxisCalculator.timeTicks(for: normal) == [

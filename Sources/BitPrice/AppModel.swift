@@ -54,6 +54,7 @@ final class AppModel: ObservableObject, BinanceFeedSink {
         case .readOnly, .recovery: true
         }
     }
+    var alertsEnabled: Bool { persistedState.alertsEnabled }
 
     init(
         persistenceStore: PersistenceStore,
@@ -190,6 +191,12 @@ final class AppModel: ObservableObject, BinanceFeedSink {
                 throw ValidationFailure.invalid("Primary item does not exist")
             }
             draft.primaryItemID = id
+        }
+    }
+
+    func setAlertsEnabled(_ enabled: Bool) throws {
+        try commitEdit { draft in
+            draft.alertsEnabled = enabled
         }
     }
 
@@ -572,7 +579,7 @@ final class AppModel: ObservableObject, BinanceFeedSink {
     }
 
     private func evaluateAlert(item: WatchItem, quote: Quote) {
-        guard !isReadOnly, let alert = item.alert else { return }
+        guard !isReadOnly, persistedState.alertsEnabled, let alert = item.alert else { return }
         let decision = AlertEngine.evaluate(itemID: item.id, alert: alert, price: quote.price, wallNow: wallClock.now())
         applyAlertDecision(decision, price: quote.price, symbol: item.symbol)
     }

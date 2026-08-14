@@ -58,6 +58,32 @@ Complete
 - [x] Record tradeoffs, no-Aqua limitations, and implementation summary
 - **Status:** complete
 
+### Phase 9: Implement settings, global alert gate, and precise chart ticks
+- [x] Read the current UI4 sources, persistence model, alert engine, tests, and build scripts
+- [x] Add inline Settings routing, immediate quit, and the persisted global alert switch
+- [x] Round axis labels/gridlines while preserving real plotting bounds
+- [x] Add focused alert, v1-default, and dual-scale axis tests
+- **Status:** complete
+
+### Phase 9 verification checkpoint
+- `bash scripts/run-tests.sh`: 28 passed, 0 failed, 2 expected no-Aqua skips.
+- `git diff --check`: passed.
+
+### Phase 10: Verify and record UI4
+- [x] Run strict app build, bundle checks, full tests, and forbidden-API audits
+- [x] Review scope and preserve NotificationService/concurrency/network behavior
+- [x] Record tradeoffs and the no-Aqua limitation in `.planning/ui/`
+- [x] Write `.codex-implement/_codex_impl_summary_ui4.md`
+- **Status:** complete
+
+## UI4 completion
+- Strict app build and bundle checks passed; no Aqua GUI launch was attempted.
+- The precision tradeoff is a span-derived fixed decimal count with uniqueness protection; labels use that count while plotting keeps true min/max bounds.
+- The global switch intentionally suspends evaluation and does not re-arm or add a grace period.
+
+## Current phase
+Complete
+
 ## Key questions
 1. How are watched assets identified and deleted, so selection can fall back safely?
 2. How are chart venue/quote disclosure and stale/failure states currently derived?
