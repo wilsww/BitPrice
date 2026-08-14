@@ -231,3 +231,27 @@
 - Final added-line audit found none of `sheet(`, `popover(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, `Form {`, or `.system(size:`; the only fixed-size font remains inside `PanelFont`. `NotificationService.swift` is unchanged.
 - No app launch or visual verification was attempted because this host has no Aqua GUI session. A desktop check remains necessary to confirm the two cards read as separate settings and the text-size explanation stays comfortable at all steps.
 - Wrote `.codex-implement/_codex_impl_summary_ui8.md`.
+
+## UI9 session: 2026-08-14
+
+### Phase 19: Inspect duplicated Settings labels
+- **Status:** in_progress
+- Read the planning skill, current `.planning/ui/` records, requested source context, and the existing `SettingsView`.
+- Confirmed each UI8 card currently repeats its setting name: the Price alerts heading plus the Toggle label, and the Text size heading plus the Picker label.
+- The correction will keep the cards structurally identical, make both headings primary, hide only the duplicate visible control labels, and add explicit accessibility labels so VoiceOver still names both controls.
+
+### Phase 19: Remove duplicated Settings card labels
+- **Status:** complete
+- Made both card headings bold primary headlines.
+- Changed the visible Toggle and Picker labels to empty labels with `.labelsHidden()` and explicit `.accessibilityLabel(...)` values, preserving VoiceOver names without repeating the card titles.
+- Kept both cards structurally identical and preserved UI8 backgrounds, 6/18 spacing, explanations, header, footer/error lines, bindings, read-only disabling, and shared frame.
+- No test was added because this is a pure layout/accessibility-label change; the existing suite was run unchanged.
+
+### Phase 20: Verify and record UI9
+- **Status:** complete
+- Final `bash scripts/run-tests.sh`: 32 passed, 0 failed, 2 expected no-Aqua skips.
+- Final `bash scripts/build-app.sh`: passed under strict Swift 6 warnings-as-errors; plist lint, codesign verification, `otool -L`, and `Contents/Resources/AppIcon.icns` checks passed.
+- Final inspection confirmed one visible setting name per card; explicit accessibility names remain on both hidden-label controls.
+- Final added-line audit found none of `sheet(`, `popover(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, `Form {`, or `.system(size:`; `NotificationService.swift` is unchanged.
+- No app launch or visual verification was attempted because this host has no Aqua GUI session. A desktop check remains necessary to confirm visual hierarchy and VoiceOver presentation in the real panel.
+- Wrote `.codex-implement/_codex_impl_summary_ui9.md`.

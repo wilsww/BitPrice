@@ -377,11 +377,12 @@ private struct SettingsView: View {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Price alerts")
-                        .panelFont(.headline)
-                        .foregroundStyle(.secondary)
-                    Toggle("Enable price alerts", isOn: alertsBinding)
+                        .panelFont(.headline, weight: .bold)
+                    Toggle("", isOn: alertsBinding)
                         .panelFont(.headline)
                         .toggleStyle(.switch)
+                        .labelsHidden()
+                        .accessibilityLabel("Enable price alerts")
                         .disabled(model.isReadOnly)
                     Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
                         .panelFont(.body)
@@ -393,15 +394,16 @@ private struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Text size")
-                        .panelFont(.headline)
-                        .foregroundStyle(.secondary)
-                    Picker("Text size", selection: textSizeBinding) {
+                        .panelFont(.headline, weight: .bold)
+                    Picker("", selection: textSizeBinding) {
                         ForEach(TextSizePreference.allCases, id: \.self) { preference in
                             Text(preference.displayName).tag(preference)
                         }
                     }
                     .pickerStyle(.segmented)
                     .panelFont(.headline)
+                    .labelsHidden()
+                    .accessibilityLabel("Text size")
                     Text("Scales text throughout the panel; the panel grows with it.")
                         .panelFont(.body)
                         .foregroundStyle(.secondary)

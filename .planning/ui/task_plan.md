@@ -61,6 +61,24 @@ Complete
 - The existing header, bindings, read-only behavior, footer/error lines, shared frame, and empty region remain unchanged.
 - Strict build, existing tests, bundle checks, and source-policy audits passed. No Aqua GUI session was available for visual confirmation.
 
+### Phase 19: Remove duplicated Settings card labels
+- [x] Read current SettingsView and repository verification context
+- [x] Make card headings primary and hide duplicate control labels
+- [x] Preserve accessibility names, control structure, bindings, and all UI8 spacing/content
+- **Status:** complete
+
+### Phase 20: Verify and record UI9
+- [x] Run strict build, full tests, bundle checks, and source-policy audits
+- [x] Inspect each card for a single visible setting name
+- [x] Record the accessibility and no-Aqua limitations
+- [x] Write `.codex-implement/_codex_impl_summary_ui9.md`
+- **Status:** complete
+
+## UI9 completion
+- The two Settings cards now show one visible setting name each through bold primary headings; Toggle and Picker labels are hidden visually but retain explicit accessibility names.
+- UI8 card structure, spacing, explanations, header, footer/error lines, bindings, read-only behavior, and shared frame remain unchanged.
+- Strict build, existing tests, bundle checks, and source-policy audits passed. No Aqua GUI session was available for visual confirmation.
+
 ### Phase 11: Implement Settings layout, text-size preference, and icon scaling
 - [x] Read the current UI5 sources, planning records, tests, and build scripts
 - [x] Add persisted stable text-size preference with default-medium fallback

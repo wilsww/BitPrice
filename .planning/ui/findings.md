@@ -131,3 +131,14 @@
 - The existing 14-point minimum spacer and shared preference-sized frame remain in place, so Settings does not resize the panel differently from other routes.
 - Verification passed: 32 tests with 0 failures and 2 expected skips; strict app build; plist/signing/linkage/icon checks; `git diff --check`; and forbidden API/font audits.
 - No Aqua GUI session exists. A human desktop check must confirm the cards read as separate settings, the explanatory lines remain attached to the correct controls, and the layout remains comfortable at Small and Extra Large.
+
+## UI9: duplicated Settings labels and accessibility
+- UI8's card titles are the intended visible setting names. The control labels must therefore be visually hidden rather than removed semantically.
+- Both cards remain a `VStack` with the same title/control/explanation structure. `.labelsHidden()` removes the duplicate visible label, while an explicit `.accessibilityLabel` preserves a meaningful VoiceOver name for the empty-label Toggle and Picker.
+- Card heading styling changes from dim secondary text to the central helper's bold headline; card backgrounds, 6-point internal spacing, 18-point inter-card spacing, explanations, header, footer, and shared frame remain unchanged.
+
+### UI9 implementation tradeoffs and verification
+- The visible labels are empty and hidden, but accessibility labels deliberately retain the control-specific names. This avoids duplicate visual copy without making VoiceOver controls nameless.
+- Both cards remain the same title/control/explanation `VStack`; no title-trailing switch exception was introduced.
+- Verification passed: 32 tests with 0 failures and 2 expected skips; strict app build; plist/signing/linkage/icon checks; `git diff --check`; forbidden API/font audits; and direct inspection of the two card blocks.
+- No Aqua GUI session exists. A human desktop check must confirm the cards read cleanly with one visible name each and that the hidden labels are presented appropriately by VoiceOver.
