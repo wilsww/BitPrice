@@ -6,7 +6,6 @@ import UniformTypeIdentifiers
 
 enum IconGenerationError: Error {
     case couldNotCreateBitmap
-    case couldNotCreateGradient
     case couldNotCreateImage
     case couldNotCreateDestination
     case couldNotWritePNG
@@ -25,6 +24,37 @@ private let iconFiles: [(name: String, pixels: Int)] = [
     ("icon_512x512.png", 512),
     ("icon_512x512@2x.png", 1024)
 ]
+
+/// Returns a sampled superellipse approximation of the continuous-curvature
+/// squircle used by modern system icons. Apple does not publish the exact
+/// system curve, so this is deliberately an approximation rather than a claim
+/// to reproduce Apple's official shape.
+private func approximateSquirclePath(in rect: CGRect) -> CGPath {
+    let exponent: CGFloat = 5
+    let sampleCount = 128
+    let center = CGPoint(x: rect.midX, y: rect.midY)
+    let radiusX = rect.width / 2
+    let radiusY = rect.height / 2
+    let path = CGMutablePath()
+
+    for sample in 0..<sampleCount {
+        let angle = 2 * CGFloat.pi * CGFloat(sample) / CGFloat(sampleCount)
+        let cosine = cos(angle)
+        let sine = sin(angle)
+        let xSign: CGFloat = cosine < 0 ? -1 : 1
+        let ySign: CGFloat = sine < 0 ? -1 : 1
+        let x = center.x + xSign * pow(abs(cosine), 2 / exponent) * radiusX
+        let y = center.y + ySign * pow(abs(sine), 2 / exponent) * radiusY
+        let point = CGPoint(x: x, y: y)
+        if sample == 0 {
+            path.move(to: point)
+        } else {
+            path.addLine(to: point)
+        }
+    }
+    path.closeSubpath()
+    return path
+}
 
 private func makeIcon(pixels: Int, destinationURL: URL) throws {
     let size = CGFloat(pixels)
@@ -47,95 +77,11 @@ private func makeIcon(pixels: Int, destinationURL: URL) throws {
 
     let inset = size * 0.035
     let tile = CGRect(x: inset, y: inset, width: size - inset * 2, height: size - inset * 2)
-    let tilePath = CGPath(
-        roundedRect: tile,
-        cornerWidth: size * 0.22,
-        cornerHeight: size * 0.22,
-        transform: nil
-    )
-    context.saveGState()
+    let tilePath = approximateSquirclePath(in: tile)
     context.addPath(tilePath)
-    context.clip()
-    let backgroundColors = [
-        CGColor(red: 0.035, green: 0.075, blue: 0.16, alpha: 1),
-        CGColor(red: 0.08, green: 0.18, blue: 0.34, alpha: 1)
-    ] as CFArray
-    guard let backgroundGradient = CGGradient(
-        colorsSpace: colorSpace,
-        colors: backgroundColors,
-        locations: [0, 1]
-    ) else {
-        throw IconGenerationError.couldNotCreateGradient
-    }
-    context.drawLinearGradient(
-        backgroundGradient,
-        start: CGPoint(x: 0, y: size),
-        end: CGPoint(x: size, y: 0),
-        options: []
-    )
-    context.restoreGState()
-
-    let coinRect = CGRect(x: size * 0.14, y: size * 0.14, width: size * 0.72, height: size * 0.72)
-    context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: -size * 0.025), blur: size * 0.055,
-                      color: CGColor(gray: 0, alpha: 0.42))
-    context.addEllipse(in: coinRect)
-    context.clip()
-    let coinColors = [
-        CGColor(red: 1.0, green: 0.69, blue: 0.08, alpha: 1),
-        CGColor(red: 0.93, green: 0.31, blue: 0.04, alpha: 1)
-    ] as CFArray
-    guard let coinGradient = CGGradient(
-        colorsSpace: colorSpace,
-        colors: coinColors,
-        locations: [0, 1]
-    ) else {
-        throw IconGenerationError.couldNotCreateGradient
-    }
-    context.drawLinearGradient(
-        coinGradient,
-        start: CGPoint(x: size * 0.28, y: size * 0.8),
-        end: CGPoint(x: size * 0.75, y: size * 0.18),
-        options: []
-    )
-    context.restoreGState()
-
-    context.setStrokeColor(CGColor(red: 1, green: 0.91, blue: 0.65, alpha: 0.92))
-    context.setLineWidth(size * 0.032)
-    context.strokeEllipse(in: coinRect.insetBy(dx: size * 0.018, dy: size * 0.018))
-
-    context.setStrokeColor(CGColor(red: 1, green: 0.985, blue: 0.9, alpha: 1))
-    context.setLineCap(.round)
-    context.setLineJoin(.round)
-
-    for stemX in [size * 0.445, size * 0.505] {
-        context.beginPath()
-        context.move(to: CGPoint(x: stemX, y: size * 0.25))
-        context.addLine(to: CGPoint(x: stemX, y: size * 0.75))
-        context.setLineWidth(size * 0.027)
-        context.strokePath()
-    }
-
-    let mark = CGMutablePath()
-    mark.move(to: CGPoint(x: size * 0.42, y: size * 0.68))
-    mark.addLine(to: CGPoint(x: size * 0.56, y: size * 0.68))
-    mark.addCurve(
-        to: CGPoint(x: size * 0.56, y: size * 0.51),
-        control1: CGPoint(x: size * 0.72, y: size * 0.68),
-        control2: CGPoint(x: size * 0.72, y: size * 0.51)
-    )
-    mark.addLine(to: CGPoint(x: size * 0.42, y: size * 0.51))
-    mark.move(to: CGPoint(x: size * 0.42, y: size * 0.51))
-    mark.addLine(to: CGPoint(x: size * 0.57, y: size * 0.51))
-    mark.addCurve(
-        to: CGPoint(x: size * 0.55, y: size * 0.31),
-        control1: CGPoint(x: size * 0.75, y: size * 0.51),
-        control2: CGPoint(x: size * 0.74, y: size * 0.31)
-    )
-    mark.addLine(to: CGPoint(x: size * 0.42, y: size * 0.31))
-    context.addPath(mark)
-    context.setLineWidth(size * 0.066)
-    context.strokePath()
+    context.setFillColor(CGColor(red: 0.969, green: 0.576, blue: 0.102, alpha: 1))
+    context.fillPath()
+    drawBitcoinGlyph(context: context, size: size)
 
     guard let image = context.makeImage() else {
         throw IconGenerationError.couldNotCreateImage
@@ -152,6 +98,48 @@ private func makeIcon(pixels: Int, destinationURL: URL) throws {
     guard CGImageDestinationFinalize(destination) else {
         throw IconGenerationError.couldNotWritePNG
     }
+}
+
+private func drawBitcoinGlyph(context: CGContext, size: CGFloat) {
+    let isSmall = size < 64
+    let lineWidth = max(size * (isSmall ? 0.09 : 0.075), 1.6)
+    let left = size * (isSmall ? 0.34 : 0.36)
+    let right = size * (isSmall ? 0.66 : 0.64)
+    let bodyTop = size * 0.69
+    let bodyMiddle = size * 0.50
+    let bodyBottom = size * 0.31
+
+    context.setStrokeColor(CGColor(gray: 1, alpha: 1))
+    context.setLineWidth(lineWidth)
+    context.setLineCap(.round)
+    context.setLineJoin(.round)
+
+    for stemX in [size * 0.42, size * 0.51] {
+        context.beginPath()
+        context.move(to: CGPoint(x: stemX, y: size * 0.20))
+        context.addLine(to: CGPoint(x: stemX, y: size * 0.80))
+        context.strokePath()
+    }
+
+    let mark = CGMutablePath()
+    mark.move(to: CGPoint(x: left, y: bodyTop))
+    mark.addLine(to: CGPoint(x: right, y: bodyTop))
+    mark.addCurve(
+        to: CGPoint(x: right, y: bodyMiddle),
+        control1: CGPoint(x: right + size * 0.07, y: bodyTop),
+        control2: CGPoint(x: right + size * 0.07, y: bodyMiddle)
+    )
+    mark.addLine(to: CGPoint(x: left, y: bodyMiddle))
+    mark.move(to: CGPoint(x: left, y: bodyMiddle))
+    mark.addLine(to: CGPoint(x: right, y: bodyMiddle))
+    mark.addCurve(
+        to: CGPoint(x: right, y: bodyBottom),
+        control1: CGPoint(x: right + size * 0.07, y: bodyMiddle),
+        control2: CGPoint(x: right + size * 0.07, y: bodyBottom)
+    )
+    mark.addLine(to: CGPoint(x: left, y: bodyBottom))
+    context.addPath(mark)
+    context.strokePath()
 }
 
 private func appendBigEndian(_ value: UInt32, to data: inout Data) {

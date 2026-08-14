@@ -354,3 +354,24 @@
 - Final added-line audit found none of `sheet(`, `popover(`, `confirmationDialog(`, `NSAlert`, `Settings {`, `keyboardShortcut`, `Form {`, or `.system(size:`). Non-target behavior files remain unchanged.
 - Plot bounds, gap-safe segment fill, measured `ViewThatFits` sizing, and panel sizing were not changed. No baseline is drawn for single-point or empty series.
 - No Aqua GUI session is available; a human desktop check remains necessary for label placement/readability at plot edges and the visual balance of the baseline against the colored chart.
+
+## Icon1 session: 2026-08-15
+
+### Phase 29: Redraw the programmatic app icon
+- **Status:** in_progress
+- Read the planning skill, current planning records, the icon generator, icon packaging script, build/test scripts, and the requested source context.
+- Confirmed the existing generator uses a rounded rectangle, dark navy gradient, gold coin gradient, rim, shadow, and a glyph stroke of about 1.06 pixels at 16×16.
+- Chose a sampled superellipse with exponent 5 as an explicit approximation of the system squircle, a flat Bitcoin-orange tile, and a white glyph with a minimum 1.6-pixel stroke at 16×16. No secondary price/trend motif will be included because it would reduce small-size legibility without adding necessary identity.
+
+### Phase 29: Implement the programmatic icon redraw
+- **Status:** complete
+- Added `approximateSquirclePath(in:)`, a 128-sample n=5 superellipse approximation documented as not Apple's official curve.
+- Replaced the navy gradient, coin gradient/rim/shadow, and old glyph construction with a flat `#F7931A`-family tile and a flat white Bitcoin glyph. The small-size branch uses a 1.6-pixel minimum stroke and a slightly wider glyph; no secondary motif was included.
+
+### Phase 30: Verify and record icon redraw
+- **Status:** complete
+- `scripts/make-icon.sh` generated an ICNS that decoded to all 10 standard PNG renditions. Programmatic RGBA inspection found 42 unique colors at 16×16 and 61 at 32×32, with nonzero samples and white glyph-center samples.
+- `bash scripts/run-tests.sh`: 32 passed, 0 failed, 2 expected no-Aqua skips; test count unchanged.
+- `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors; plist lint, codesign verification, linkage, and `Contents/Resources/AppIcon.icns` checks passed.
+- An initial verification command was rejected because its cleanup trap contained `rm -rf`; it did not change repository content. The same verification was rerun without cleanup and passed, leaving only a temporary directory under `/tmp`.
+- `Sources/` and `scripts/make-icon.sh` are unchanged. No GUI was available to judge whether the squircle, orange hue, and glyph balance match current macOS icon aesthetics.

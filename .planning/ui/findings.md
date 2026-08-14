@@ -168,3 +168,13 @@
 - Sparkline color comes from the selected item's current quote change, matching row convention: positive green, negative red, zero secondary, and unavailable/missing accent. No direction is inferred from chart endpoints.
 - The area fill is drawn per contiguous <=90-minute segment before the full-strength stroke, so gradients do not span data gaps. Four existing axis ticks and the 50-point axis-label reserve remain valid at taller chart heights.
 - No baseline was added: `ChartSeries` exposes no opening close, and a midpoint or first/last inference would fabricate a reference.
+
+## Icon1: flat macOS-style app icon
+- The current icon's rounded rectangle, navy gradient, coin gradient/rim, and shadow create the skeuomorphic appearance this pass removes. The existing glyph line width is `0.066 * size`, only about 1.06 pixels at 16×16.
+- The replacement will sample `|x|^5 + |y|^5 = 1` around the tile to create a continuous-curvature squircle approximation. It must be documented as an approximation, not Apple's unpublished official curve.
+- Small sizes will use the same simplified glyph geometry with a proportional stroke floor of 1.6 pixels at 16×16. No price or sparkline motif will be drawn at any size: the flat orange/white mark has stronger small-size contrast and fewer failure modes.
+
+### Icon1 implementation and verification
+- The final source uses 128 samples around an exponent-5 superellipse, fills the inset path with flat Bitcoin orange, and draws only the white glyph. The system squircle remains an approximation because Apple does not publish its curve.
+- The optional secondary motif was deliberately omitted. At 16×16 and 32×32, the identity is already carried by the orange tile and white glyph; adding a trend mark would crowd the Finder-sized representations.
+- The generated ICNS decoded to all ten standard renditions. Pixel inspection confirmed the 16×16 and 32×32 images are varied and nonblank. Human desktop review is still required for system-icon visual balance and color judgment.

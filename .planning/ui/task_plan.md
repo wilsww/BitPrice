@@ -154,6 +154,26 @@ Complete
 - The chart baseline is the first candle close for series with at least two points, labelled with the existing axis precision and drawn behind the unchanged fill/stroke.
 - Baseline helper tests cover normal, flat, single-point, and empty series. Strict build/tests and bundle/source audits passed; no Aqua GUI session was available.
 
+### Phase 29: Redraw the programmatic app icon
+- [x] Read the current icon generator and packaging/verification path
+- [x] Replace the rounded rectangle with a documented sampled squircle approximation
+- [x] Remove gradients, rim, shadow, and coin disc in favor of a flat orange tile and white glyph
+- [x] Add proportional/small-size glyph treatment with no secondary motif
+- **Status:** complete
+
+### Phase 30: Verify and record icon redraw
+- [x] Build/package the icon and confirm all ten renditions decode
+- [x] Check 16×16 and 32×32 pixels are nonblank and not single-colour
+- [x] Run strict app build, full tests, bundle checks, and source-scope audits
+- [x] Record the approximation, small-size decision, and no-GUI limitation
+- [x] Write `.codex-implement/_codex_impl_summary_icon1.md`
+- **Status:** complete
+
+## Icon1 completion
+- The icon is now a flat Bitcoin-orange sampled n=5 superellipse tile with a white glyph, no coin disc, gradients, rim, or shadow, and no secondary price/trend motif.
+- Small-size glyph rendering uses a proportional branch with a 1.6-pixel minimum stroke at 16×16. All ten ICNS renditions decoded, and 16×16/32×32 pixel checks passed.
+- Strict app build/tests and source-scope audits passed. No GUI session was available to judge the final system-icon balance.
+
 
 
 ### Phase 11: Implement Settings layout, text-size preference, and icon scaling
