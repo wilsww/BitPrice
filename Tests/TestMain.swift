@@ -351,6 +351,22 @@ struct BitPriceTests {
                 let request = try expectOne(await transport.capturedRequests())
                 try expect(request.url?.absoluteString.contains("btc%20%26%20usd") == true, "query not encoded")
             },
+            AcceptanceTest(name: "08c CoinGecko HTML entity decoding") {
+                let searchBody = Data(#"{"coins":[{"id":"sand","name":"S&amp;L &lt;token&gt; &quot;quoted&quot; &#39;single&#39; &apos;apostrophe&apos; &#38; &#x26; & bare","symbol":"s&AMP;l","market_cap_rank":null,"thumb":null}]}"#.utf8)
+                let clients = clients(transport: StubHTTPTransport([response(body: searchBody)]))
+                let results = try await clients.searchCoinGecko(query: "sand")
+                try expect(results.count == 1, "entity fixture result count changed")
+                try expect(
+                    results[0].symbol == "S&L",
+                    "symbol entity was not decoded at the search boundary"
+                )
+                try expect(
+                    results[0].name == "S&L <token> \"quoted\" 'single' 'apostrophe' & & & bare",
+                    "name entities were not decoded at the search boundary"
+                )
+                let plain = "SAND"
+                try expect(decodeHTMLEntities(plain) == plain, "plain text was changed by entity decoding")
+            },
             AcceptanceTest(name: "08b Coinbase-wide 10/s burst-15 pacing") {
                 let pacer = TokenBucketPacer(clock: SystemContinuousTimeSource(), ratePerSecond: 10, burst: 15)
                 let start = Date()

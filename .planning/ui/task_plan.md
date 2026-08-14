@@ -24,6 +24,26 @@ Complete
 - Final strict build and bundle checks passed. The full harness reports 31 passed, 0 failed, and 2 expected no-Aqua skips.
 - No Aqua GUI session was available, so Medium visual parity, Extra Large usability, and circled-icon balance still need desktop confirmation.
 
+### Phase 15: Implement add-coin layout, disclosure, and entity decoding
+- [x] Read current add-coin, REST parsing, test, and planning context
+- [x] Move Cancel to the leading edge and establish coin/market hierarchy
+- [x] Disclose Binance live-source and Coinbase fallback roles and Add's enabling rule
+- [x] Scale and space the Back/Add controls through the central font helper
+- [x] Decode CoinGecko HTML entities at the search parsing boundary
+- [x] Add focused entity-decoding and search-boundary coverage
+- **Status:** complete
+
+### Phase 16: Verify and record UI7
+- [x] Run strict build, full tests, bundle checks, and source-policy audits
+- [x] Record layout/data tradeoffs and no-Aqua limitations
+- [x] Write `.codex-implement/_codex_impl_summary_ui7.md`
+- **Status:** complete
+
+## UI7 completion
+- Add coin now uses a leading Cancel, centered title, explicit Coin/Markets hierarchy, role-labeled venue cards, visible Add eligibility rules, and scaled bordered Back/Add controls.
+- CoinGecko search identity text is decoded at the REST parsing boundary for named and numeric entities; unknown and bare ampersands remain unchanged.
+- Final build, test, bundle, and source-policy checks passed. No Aqua GUI session was available for visual confirmation.
+
 ### Phase 11: Implement Settings layout, text-size preference, and icon scaling
 - [x] Read the current UI5 sources, planning records, tests, and build scripts
 - [x] Add persisted stable text-size preference with default-medium fallback

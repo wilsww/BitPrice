@@ -102,3 +102,20 @@
 - Header `plus` and `gearshape` changed to `plus.circle` and `gearshape.circle`; the row/detail glyphs now use the same scaled helper instead of `.imageScale(.large)`, keeping icon size proportional to the selected text step.
 - Final verification passed after the helper edit: strict app build and bundle checks, 31 tests with 0 failures and 2 expected skips, `git diff --check`, and forbidden-API/font audits.
 - No Aqua GUI session is available here. A human desktop check must confirm Medium is genuinely unchanged relative to UI5 and that Extra Large remains usable rather than absurd, plus the circled-icon visual balance.
+
+## UI7: add-coin hierarchy, venue roles, and CoinGecko entity boundary
+- `AddCoinView` currently shares one leading-aligned `HStack` for its title and trailing Cancel. The confirmation route can use the Settings-style full-width `ZStack`: centered title, leading Cancel, and an intentionally empty trailing slot.
+- The confirmation warning is the right place to state that ticker matching is a string guess rather than verified identity, and that an incorrect confirmation can still produce a plausible-looking wrong price. It remains an orange prominent block.
+- The selected CoinGecko project should be a distinct identity card/section above a `Markets` section. Binance and Coinbase can each use the same card treatment while retaining inline radio rows; this preserves the `.window` panel lifecycle constraint.
+- Binance is the live WebSocket source. Coinbase is the fallback polled every 60 seconds when Binance is unavailable or has no market; both roles need explicit one-line descriptions, while the existing missed-breach caveat remains.
+- Add's existing predicate is correct: both venue answers must be non-nil and they must not both be `__none__`. A visible rule line can disclose that predicate without changing selection or auto-selecting either venue.
+- CoinGecko search JSON is decoded into a private envelope and mapped to `SearchResult` in `RESTClients.searchCoinGecko`; HTML entity decoding belongs in this map before uppercasing/storing the symbol and before the result reaches SwiftUI or `WatchItem` creation.
+- The explicit decoder will recognize case-insensitive `amp`, `lt`, `gt`, `quot`, `apos`, numeric decimal entities, and numeric hexadecimal entities. Unknown or unterminated `&...` sequences remain byte-for-byte unchanged, so the decoder cannot fabricate text.
+
+### UI7 implementation tradeoffs and verification
+- The Coin identity and both venue blocks use the same neutral rounded-card treatment; section labels (“Coin” and “Markets”) establish subject-versus-market hierarchy without introducing a separate presentation surface.
+- Binance and Coinbase remain independently answered inline. The Add rule is disclosed in text and implemented through the existing predicate: both answers are required and at least one must be a real market.
+- The warning is intentionally concise but still names both failure properties: ticker matching is an unverified string guess, and a wrong confirmation can look plausible while showing the wrong price.
+- Entity decoding is deliberately explicit and conservative: recognized entities become their scalar characters, while unknown, malformed, or bare-ampersand text is preserved rather than guessed.
+- Verification passed: 32 tests with 0 failures and 2 expected skips; strict app build; plist/signing/linkage/icon checks; `git diff --check`; and forbidden presentation, shortcut, HTML-importer, and fixed-font audits.
+- No Aqua GUI session exists. A human desktop check is still needed for the warning staying within two lines, card density and scrolling, role-description readability, and Back/Add hit-area/fit at Small and Extra Large.

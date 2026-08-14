@@ -778,13 +778,17 @@ private struct AddCoinView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            ZStack {
                 Text(project == nil ? "Add coin" : "Confirm markets")
                     .panelFont(.title2, weight: .bold)
-                Spacer()
-                Button("Cancel", action: close)
-                    .panelFont(.headline)
+                HStack {
+                    Button("Cancel", action: close)
+                        .panelFont(.headline)
+                        .buttonStyle(.borderless)
+                    Spacer()
+                }
             }
+            .frame(maxWidth: .infinity)
             if let project {
                 confirmation(project)
             } else {
@@ -827,32 +831,63 @@ private struct AddCoinView: View {
     private func confirmation(_ result: SearchResult) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Label("Candidates matched by ticker; verify the market.", systemImage: "exclamationmark.triangle.fill")
+                Label(
+                    "Ticker matches are string guesses, not verified identities. A wrong choice can show a plausible-looking wrong price.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
                     .panelFont(.headline)
                     .foregroundStyle(.orange)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 3) {
+                    Text("Coin")
+                        .panelFont(.headline)
+                        .foregroundStyle(.secondary)
                     Text(result.symbol)
                         .panelFont(.title2, weight: .bold)
                     Text("\(result.name) · \(result.id)")
                         .panelFont(.headline)
                         .foregroundStyle(.secondary)
                 }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                 if loadingCandidates {
                     ProgressView()
                 } else {
-                    candidatePicker(title: "Binance / USDT", candidates: binanceCandidates, selection: $selectedBinance)
-                    candidatePicker(title: "Coinbase / USD", candidates: coinbaseCandidates, selection: $selectedCoinbase)
+                    Text("Markets")
+                        .panelFont(.headline)
+                        .foregroundStyle(.secondary)
+                    candidatePicker(
+                        title: "Binance · Live price source",
+                        description: "WebSocket ticks provide the primary live price.",
+                        candidates: binanceCandidates,
+                        selection: $selectedBinance
+                    )
+                    candidatePicker(
+                        title: "Coinbase · Fallback",
+                        description: "Polled every 60 seconds when Binance is missing or unavailable.",
+                        candidates: coinbaseCandidates,
+                        selection: $selectedCoinbase
+                    )
                     Text("Coinbase polling is every 60 seconds and can miss a brief alert breach.")
+                        .panelFont(.body)
+                        .foregroundStyle(.secondary)
+                    Text("Add is enabled after both venues are answered and at least one has a market.")
                         .panelFont(.body)
                         .foregroundStyle(.secondary)
                     HStack(spacing: 12) {
                         Button("Back") { project = nil }
+                            .panelFont(.headline)
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
                         Button("Add") { confirm(result) }
-                            .disabled(selectedBinance == nil || selectedCoinbase == nil ||
-                                      selectedBinance == "__none__" && selectedCoinbase == "__none__")
+                            .panelFont(.headline)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
+                            .disabled(!canAdd)
+                        Spacer(minLength: 0)
                     }
                     .padding(.top, 4)
                 }
@@ -866,11 +901,19 @@ private struct AddCoinView: View {
     /// A `Picker`'s popup menu takes key status away from the `MenuBarExtra`
     /// window, which dismisses the whole panel. Every control here must resolve
     /// inside the panel itself.
-    private func candidatePicker(title: String, candidates: [VenueCandidate], selection: Binding<String?>) -> some View {
+    private func candidatePicker(
+        title: String,
+        description: String,
+        candidates: [VenueCandidate],
+        selection: Binding<String?>
+    ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
                 .panelFont(.title3, weight: .bold)
-                .padding(.bottom, 4)
+            Text(description)
+                .panelFont(.body)
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 4)
             candidateRow(label: "No market", value: "__none__", selection: selection)
             ForEach(candidates) { candidate in
                 candidateRow(
@@ -886,6 +929,14 @@ private struct AddCoinView: View {
                     .padding(.vertical, 7)
             }
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var canAdd: Bool {
+        guard let selectedBinance, let selectedCoinbase else { return false }
+        return selectedBinance != "__none__" || selectedCoinbase != "__none__"
     }
 
     private func candidateRow(label: String, value: String, selection: Binding<String?>) -> some View {

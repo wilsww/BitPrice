@@ -115,6 +115,60 @@ actor TokenBucketPacer: RequestPacer {
     }
 }
 
+func decodeHTMLEntities(_ text: String) -> String {
+    var decoded = String()
+    decoded.reserveCapacity(text.utf8.count)
+    var index = text.startIndex
+    while index < text.endIndex {
+        guard text[index] == "&" else {
+            decoded.append(text[index])
+            index = text.index(after: index)
+            continue
+        }
+
+        let entityStart = text.index(after: index)
+        guard entityStart < text.endIndex,
+              let semicolon = text[entityStart...].firstIndex(of: ";"),
+              semicolon > entityStart,
+              let replacement = decodeHTMLEntity(String(text[entityStart..<semicolon])) else {
+            decoded.append(text[index])
+            index = text.index(after: index)
+            continue
+        }
+
+        decoded.append(contentsOf: replacement)
+        index = text.index(after: semicolon)
+    }
+    return decoded
+}
+
+private func decodeHTMLEntity(_ entity: String) -> String? {
+    switch entity.lowercased() {
+    case "amp": return "&"
+    case "lt": return "<"
+    case "gt": return ">"
+    case "quot": return "\""
+    case "apos": return "'"
+    default: break
+    }
+
+    let normalized = entity.lowercased()
+    let digits: Substring
+    let radix: Int
+    if normalized.hasPrefix("#x") {
+        digits = normalized.dropFirst(2)
+        radix = 16
+    } else if normalized.hasPrefix("#") {
+        digits = normalized.dropFirst()
+        radix = 10
+    } else {
+        return nil
+    }
+    guard let value = UInt32(digits, radix: radix),
+          let scalar = UnicodeScalar(value) else { return nil }
+    return String(scalar)
+}
+
 private struct CoinGeckoSearchEnvelope: Decodable {
     let coins: [Coin]
 
@@ -263,8 +317,8 @@ actor RESTClients {
         return envelope.coins.map {
             SearchResult(
                 id: $0.id,
-                name: $0.name,
-                symbol: $0.symbol.uppercased(),
+                name: decodeHTMLEntities($0.name),
+                symbol: decodeHTMLEntities($0.symbol).uppercased(),
                 marketCapRank: $0.marketCapRank,
                 thumbnailURL: $0.thumb.flatMap(URL.init(string:))
             )

@@ -179,3 +179,31 @@
 - Recorded the macOS DynamicTypeSize limitation and the accepted fixed-size multiplier tradeoff in `findings.md`.
 - Wrote `.codex-implement/_codex_impl_summary_ui6.md`.
 - No app launch or visual verification was attempted because this host has no Aqua GUI session. A desktop check remains necessary for Medium parity, Extra Large usability, and circled-icon balance.
+
+## UI7 session: 2026-08-14
+
+### Phase 15: Inspect add-coin flow and data boundary
+- **Status:** in_progress
+- Read the planning skill, existing `.planning/ui/` records, and all requested source/test/build files.
+- Confirmed `AddCoinView` currently uses a trailing Cancel, a generic ticker warning, ungrouped venue rows, silent Add eligibility, and unscaled default Back/Add controls.
+- Confirmed CoinGecko search results are mapped directly into `SearchResult` in `RESTClients.searchCoinGecko`; this is the correct parsing boundary for explicit HTML-entity decoding.
+- The first combined planning patch did not match the existing progress-file wording; no repository content was changed by that failed patch, and the plan update was then applied in two targeted patches.
+- The first test compile rejected `.accent` as a SwiftUI `ShapeStyle`; changed the new Coin card background to `Color.accentColor`.
+
+### Phase 15: Implement add-coin layout, disclosure, and entity decoding
+- **Status:** complete
+- Moved Add coin's Cancel control to the leading edge inside a centered-title header while preserving the word “Cancel”.
+- Rewrote the orange warning to explain unverified ticker-string identity and plausible-looking wrong prices.
+- Grouped the selected Coin identity and Markets into consistent cards, and added explicit Binance live-source and Coinbase fallback descriptions.
+- Kept both inline venue radio controls and the existing 60-second Coinbase missed-breach caveat; disclosed the exact Add enabling rule without changing selection semantics.
+- Routed Back/Add through `panelFont`, added bordered large controls, and laid them out as a leading action group with spacing.
+- Added explicit case-insensitive named and decimal/hex numeric HTML-entity decoding at the CoinGecko search mapping boundary; unknown/unterminated entities remain unchanged.
+- Added a REST search fixture covering named entities, `&#39;`, `&apos;`, `&#38;`, `&#x26;`, uppercase `&AMP;`, a bare ampersand, and unchanged plain text.
+
+### Phase 16: Verify and record UI7
+- **Status:** complete
+- Final `bash scripts/run-tests.sh`: 32 passed, 0 failed, 2 expected no-Aqua skips.
+- Final `bash scripts/build-app.sh`: passed under strict Swift 6 warnings-as-errors; plist lint, codesign verification, `otool -L`, and `Contents/Resources/AppIcon.icns` checks passed.
+- Final `git diff --check` and added-line audits found no forbidden presentations, menu shortcuts, `NSAttributedString`, or fixed-size fonts outside `PanelFont`; `NotificationService.swift` is unchanged.
+- No app launch or visual verification was attempted because this host has no Aqua GUI session. Human desktop confirmation remains necessary for warning wrapping, card density, and Back/Add fit at all text-size steps.
+- Wrote `.codex-implement/_codex_impl_summary_ui7.md`.
