@@ -10,6 +10,7 @@ enum IconGenerationError: Error {
     case couldNotCreateDestination
     case couldNotWritePNG
     case couldNotReadPixels
+    case couldNotCreateGradient
 }
 
 private let iconFiles: [(name: String, pixels: Int)] = [
@@ -78,10 +79,8 @@ private func makeIcon(pixels: Int, destinationURL: URL) throws {
     let inset = size * 0.035
     let tile = CGRect(x: inset, y: inset, width: size - inset * 2, height: size - inset * 2)
     let tilePath = approximateSquirclePath(in: tile)
-    context.addPath(tilePath)
-    context.setFillColor(CGColor(red: 0.969, green: 0.576, blue: 0.102, alpha: 1))
-    context.fillPath()
-    drawBitcoinGlyph(context: context, size: size)
+    try fillWithGradient(context: context, path: tilePath, rect: tile)
+    drawChartMark(context: context, tile: tile)
 
     guard let image = context.makeImage() else {
         throw IconGenerationError.couldNotCreateImage
@@ -100,44 +99,75 @@ private func makeIcon(pixels: Int, destinationURL: URL) throws {
     }
 }
 
-private func drawBitcoinGlyph(context: CGContext, size: CGFloat) {
-    let isSmall = size < 64
-    let lineWidth = max(size * (isSmall ? 0.09 : 0.075), 1.6)
-    let left = size * (isSmall ? 0.34 : 0.36)
-    let right = size * (isSmall ? 0.66 : 0.64)
-    let bodyTop = size * 0.69
-    let bodyMiddle = size * 0.50
-    let bodyBottom = size * 0.31
+/// The icon's background: indigo through electric blue into cyan, drawn from
+/// the bottom-left corner to the top-right so the brightest end sits where the
+/// chart mark breaks out.
+///
+/// Three stops rather than two. A two-stop gradient's midpoint is forced to the
+/// average of its ends, which flattens the middle of the tile — most of its
+/// visible area. The third stop lets the middle be brighter than that average,
+/// which is what gives the gradient its range.
+private func fillWithGradient(context: CGContext, path: CGPath, rect: CGRect) throws {
+    context.saveGState()
+    defer { context.restoreGState() }
+    context.addPath(path)
+    context.clip()
+
+    let colors = [
+        CGColor(red: 0.106, green: 0.145, blue: 0.749, alpha: 1),   // #1B25BF indigo
+        CGColor(red: 0.098, green: 0.549, blue: 0.988, alpha: 1),   // #198CFC electric blue
+        CGColor(red: 0.365, green: 0.953, blue: 0.988, alpha: 1)    // #5DF3FC cyan
+    ] as CFArray
+    guard let gradient = CGGradient(
+        colorsSpace: CGColorSpaceCreateDeviceRGB(),
+        colors: colors,
+        locations: [0, 0.5, 1]
+    ) else {
+        throw IconGenerationError.couldNotCreateGradient
+    }
+    context.drawLinearGradient(
+        gradient,
+        start: CGPoint(x: rect.minX, y: rect.minY),
+        end: CGPoint(x: rect.maxX, y: rect.maxY),
+        options: []
+    )
+}
+
+/// The chart mark, in unit coordinates within the tile, y up.
+///
+/// Read left to right: a rising lead-in, then two troughs around a middle peak
+/// that stays below both outer highs — which is what makes the shape a W rather
+/// than a zigzag — then a breakout carrying above everything before it. The W
+/// is the core of the mark; the two extensions are what keep it reading as a
+/// price series instead of a bare letter.
+private let chartMarkPoints: [CGPoint] = [
+    CGPoint(x: 0.08, y: 0.42),
+    CGPoint(x: 0.22, y: 0.62),
+    CGPoint(x: 0.34, y: 0.26),
+    CGPoint(x: 0.50, y: 0.55),
+    CGPoint(x: 0.65, y: 0.29),
+    CGPoint(x: 0.92, y: 0.86)
+]
+
+private func drawChartMark(context: CGContext, tile: CGRect) {
+    // Six vertices is at the edge of what a 16-pixel tile can hold. Below 64
+    // pixels the stroke is thickened so the line survives rasterisation; the
+    // floor keeps it from vanishing entirely at the smallest size.
+    let isSmall = tile.width < 64
+    let weight: CGFloat = isSmall ? 0.095 : 0.075
+    let lineWidth = max(tile.width * weight, 1.6)
+
+    let points = chartMarkPoints.map { unit in
+        CGPoint(x: tile.minX + unit.x * tile.width, y: tile.minY + unit.y * tile.height)
+    }
+    let mark = CGMutablePath()
+    mark.move(to: points[0])
+    for point in points.dropFirst() { mark.addLine(to: point) }
 
     context.setStrokeColor(CGColor(gray: 1, alpha: 1))
     context.setLineWidth(lineWidth)
     context.setLineCap(.round)
     context.setLineJoin(.round)
-
-    for stemX in [size * 0.42, size * 0.51] {
-        context.beginPath()
-        context.move(to: CGPoint(x: stemX, y: size * 0.20))
-        context.addLine(to: CGPoint(x: stemX, y: size * 0.80))
-        context.strokePath()
-    }
-
-    let mark = CGMutablePath()
-    mark.move(to: CGPoint(x: left, y: bodyTop))
-    mark.addLine(to: CGPoint(x: right, y: bodyTop))
-    mark.addCurve(
-        to: CGPoint(x: right, y: bodyMiddle),
-        control1: CGPoint(x: right + size * 0.07, y: bodyTop),
-        control2: CGPoint(x: right + size * 0.07, y: bodyMiddle)
-    )
-    mark.addLine(to: CGPoint(x: left, y: bodyMiddle))
-    mark.move(to: CGPoint(x: left, y: bodyMiddle))
-    mark.addLine(to: CGPoint(x: right, y: bodyMiddle))
-    mark.addCurve(
-        to: CGPoint(x: right, y: bodyBottom),
-        control1: CGPoint(x: right + size * 0.07, y: bodyMiddle),
-        control2: CGPoint(x: right + size * 0.07, y: bodyBottom)
-    )
-    mark.addLine(to: CGPoint(x: left, y: bodyBottom))
     context.addPath(mark)
     context.strokePath()
 }

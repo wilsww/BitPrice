@@ -530,3 +530,17 @@
 - Desktop verification passed at Extra Large: no colour cast from a window behind the panel, cards still distinct against the material, Quit visible and reachable in the footer, the disclosure text wrapping rather than truncating, and the reordered cards otherwise unchanged.
 - Two follow-up edits were made after that review and re-verified with a strict build and the full test run: Quit restored to `.borderedProminent`/`.tint(.red)` with the label shortened to "Quit", and the `SettingsView.body` block re-indented to match its enclosing `GeometryReader`/`ScrollView` (whitespace only — the implementation had left the original nesting depth in place when it added the two wrappers).
 - Still unverified on the desktop: light appearance (the review was in dark), and an appearance change made while the panel is open.
+
+## UI25 session: 2026-08-15
+
+### Phase 55: Redesign the app icon
+- **Status:** complete
+- Added `scripts/preview-icon.swift` to render candidate artwork to a contact sheet, iterated on shape, gradient range, and mark geometry, and moved the selected candidate's drawing code into `scripts/make-icon.swift`.
+- Replaced the flat orange fill with a three-stop indigo/electric-blue/cyan diagonal gradient and the bitcoin glyph with the W-forming chart mark.
+
+### Phase 56: Verify UI25
+- **Status:** complete
+- `bash scripts/make-icon.sh` produced a container passing `iconutil`'s independent decode with all ten representations present.
+- The legacy `is32`/`il32` compressed-RGB representations were extracted from the built container and inspected at 16 and 32 pixels: the gradient survives run-length encoding and the mark stays legible.
+- `bash scripts/build-app.sh` passed strict compilation, plist lint, signing, linkage, and the bundled-icon check. `bash scripts/run-tests.sh`: 38 passed, 0 failed, 2 expected no-Aqua skips.
+- Desktop-only check outstanding: how the icon reads in the Dock and Finder beside other applications, at the system's own rendering rather than an extracted PNG.

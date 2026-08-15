@@ -15,3 +15,7 @@ build/
 
 # macOS
 .DS_Store
+
+# Icon candidate contact sheets. Regenerable with scripts/preview-icon.swift;
+# only the chosen design's reference render is tracked.
+design/icon/candidates.png
