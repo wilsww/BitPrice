@@ -294,6 +294,7 @@ struct BitPriceTests {
                 }
                 object.removeValue(forKey: "alertsEnabled")
                 object.removeValue(forKey: "textSize")
+                object.removeValue(forKey: "chartRange")
                 object.removeValue(forKey: "defaultAlertCooldownSeconds")
                 object.removeValue(forKey: "defaultAlertHysteresisPercent")
                 let legacyV1 = try JSONSerialization.data(withJSONObject: object)
@@ -306,6 +307,7 @@ struct BitPriceTests {
                 }
                 try expect(state.alertsEnabled, "absent alertsEnabled did not default to on")
                 try expect(state.textSize == .medium, "absent textSize did not default to medium")
+                try expect(state.chartRange == .hours24, "absent chart range did not default to 24h")
                 try expect(state.defaultAlertCooldownSeconds == 30 && state.defaultAlertHysteresisPercent == 10,
                            "absent alert defaults did not use documented defaults")
                 try expect(!store.recoveryProtected, "valid v1 without alertsEnabled was protected")
@@ -313,6 +315,7 @@ struct BitPriceTests {
                 let encodedObject = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
                 try expect(encodedObject?["alertsEnabled"] as? Bool == true, "alertsEnabled was not encoded")
                 try expect(encodedObject?["textSize"] as? String == "medium", "textSize was not encoded")
+                try expect(encodedObject?["chartRange"] as? String == "24h", "chart range was not encoded")
                 try expect(encodedObject?["defaultAlertCooldownSeconds"] as? Int == 30,
                            "default cooldown was not encoded")
                 try expect(encodedObject?["defaultAlertHysteresisPercent"] as? String == "10",
@@ -381,6 +384,36 @@ struct BitPriceTests {
                     try validatePersistedState(invalidHysteresis)
                     throw TestFailure(description: "out-of-range default hysteresis was accepted")
                 } catch is ValidationFailure {}
+            },
+            AcceptanceTest(name: "06f chart range persistence and fallback") {
+                for range in ChartRange.allCases {
+                    let root = try temporaryRoot()
+                    defer { try? FileManager.default.removeItem(at: root) }
+                    let store = try PersistenceStore(rootDirectory: root)
+                    var state = PersistedState.bitcoinSeed()
+                    state.chartRange = range
+                    try store.save(state)
+                    guard case .loaded(let reloaded) = store.load() else {
+                        throw TestFailure(description: "saved chart range did not load")
+                    }
+                    try expect(reloaded.chartRange == range, "saved chart range changed during round trip")
+                }
+
+                let fixture = try Data(contentsOf: URL(fileURLWithPath: "Tests/Fixtures/watchlist-v1.json"))
+                guard var object = try JSONSerialization.jsonObject(with: fixture) as? [String: Any] else {
+                    throw TestFailure(description: "v1 fixture was not a JSON object")
+                }
+                object["chartRange"] = "90d"
+                let unknownRange = try JSONSerialization.data(withJSONObject: object)
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                try unknownRange.write(to: root.appendingPathComponent("watchlist.json"))
+                let store = try PersistenceStore(rootDirectory: root)
+                guard case .loaded(let state) = store.load() else {
+                    throw TestFailure(description: "unrecognized chart range entered recovery")
+                }
+                try expect(state.chartRange == .hours24, "unrecognized chart range did not default to 24h")
+                try expect(!store.recoveryProtected, "unrecognized chart range protected a valid v1 file")
             },
             AcceptanceTest(name: "07 future unregistered-older dispatch path") {
                 try expect(schemaDispatch(version: 1, current: 2, registeredVersions: [0, 2]) == .unregisteredOlder,
@@ -532,11 +565,86 @@ struct BitPriceTests {
                 let outside = Int64((start.addingTimeInterval(-3_600).timeIntervalSince1970) * 1_000)
                 let body = Data("[[\(inside),\"1\",\"1\",\"1\",\"2\"],[\(inside),\"1\",\"1\",\"1\",\"3\"],[\(outside),\"1\",\"1\",\"1\",\"4\"]]".utf8)
                 let candleClient = clients(transport: StubHTTPTransport([response(body: body)]))
-                let points = try await candleClient.binanceCandles(productID: "BTCUSDT", start: start, end: end)
+                let points = try await candleClient.binanceCandles(
+                    productID: "BTCUSDT", range: .hours24, start: start, end: end
+                )
                 try expect(points.count == 1 && points[0].close == 3, "range/dedup normalization wrong")
                 let failing = clients(transport: StubHTTPTransport([response(status: 500, body: Data(#"[]"#.utf8))]))
-                do { _ = try await failing.coinbaseCandles(productID: "BTC-USD", start: start, end: end); throw TestFailure(description: "500 decoded") }
+                do {
+                    _ = try await failing.coinbaseCandles(
+                        productID: "BTC-USD", range: .hours24, start: start, end: end
+                    )
+                    throw TestFailure(description: "500 decoded")
+                }
                 catch let failure as NetworkFailure { try expect(failure.code == 500, "wrong status") }
+            },
+            AcceptanceTest(name: "17c chart range table and Coinbase limits") {
+                let expected: [(ChartRange, TimeInterval, String, Int, Int)] = [
+                    (.hours24, 86_400, "15m", 900, 96),
+                    (.days7, 604_800, "6h", 21_600, 29),
+                    (.days30, 2_592_000, "1d", 86_400, 31)
+                ]
+                for (range, lookback, interval, granularity, candles) in expected {
+                    try expect(
+                        range.lookbackSeconds == lookback &&
+                            range.binanceInterval == interval &&
+                            range.coinbaseGranularity == granularity &&
+                            range.candleCount == candles,
+                        "chart range table changed for \(range.rawValue)"
+                    )
+                }
+                let legalCoinbaseGranularities: Set<Int> = [60, 300, 900, 3_600, 21_600, 86_400]
+                try expect(
+                    Set(ChartRange.allCases.map(\.coinbaseGranularity)).isSubset(of: legalCoinbaseGranularities),
+                    "ChartRange emitted an illegal Coinbase granularity"
+                )
+            },
+            AcceptanceTest(name: "17d normalized candles at every range granularity") {
+                let start = Date(timeIntervalSince1970: 10_000)
+                for range in ChartRange.allCases {
+                    let step = TimeInterval(range.coinbaseGranularity)
+                    let inside = start.addingTimeInterval(step)
+                    let candidates = [
+                        CandlePoint(bucketStart: start.addingTimeInterval(-step), close: 1),
+                        CandlePoint(bucketStart: inside, close: 2),
+                        CandlePoint(bucketStart: inside, close: 3),
+                        CandlePoint(bucketStart: inside.addingTimeInterval(step), close: 4)
+                    ]
+                    let points = normalizedCandles(
+                        candidates,
+                        start: start,
+                        end: start.addingTimeInterval(range.lookbackSeconds)
+                    )
+                    try expect(
+                        points == [
+                            CandlePoint(bucketStart: inside, close: 3),
+                            CandlePoint(bucketStart: inside.addingTimeInterval(step), close: 4)
+                        ],
+                        "candle normalization changed for \(range.rawValue)"
+                    )
+                }
+            },
+            AcceptanceTest(name: "17e chart gap threshold follows range granularity") {
+                let start = Date(timeIntervalSince1970: 10_000)
+                for range in ChartRange.allCases {
+                    let bucket = TimeInterval(range.coinbaseGranularity)
+                    try expect(
+                        !ChartGapCalculator.isGap(
+                            from: start,
+                            to: start.addingTimeInterval(bucket),
+                            range: range
+                        ),
+                        "normal \(range.rawValue) bucket spacing was treated as a gap"
+                    )
+                    try expect(
+                        ChartGapCalculator.isGap(
+                            from: start,
+                            to: start.addingTimeInterval(bucket * 2),
+                            range: range
+                        ),
+                        "missing \(range.rawValue) bucket was not treated as a gap"
+                    )
+                }
             },
             AcceptanceTest(name: "17b stale chart completion after remap is rejected") {
                 let root = try temporaryRoot()

@@ -246,3 +246,29 @@
 - `Tests/TestMain.swift` updates test 22d for cross-selection retention, exact custom values, on-list appearance, and single-custom-list behavior.
 - The strict test suite passed with 34 tests and 2 expected no-Aqua skips. The strict app build passed, including plist lint, code-sign verification, linkage, and the bundled icon check.
 - No Aqua GUI session was available. Desktop review remains necessary to confirm the retained segment survives actual 45s → 1m → 45s interaction, disappears after leaving and returning with 60s stored, and remains usable at Extra Large.
+
+## UI22: selectable chart time range
+- `ChartRange` will be the sole source for lookback seconds, Binance interval, Coinbase granularity, and expected candle count. The 24h/7d/30d table is represented as 15m/6h/1d, 900/21600/86400, and 96/29/31 respectively.
+- Coinbase's accepted granularity list is the binding constraint: a requested 30-minute 24h density was rejected because Coinbase has no 1800-second granularity. Using 15m for 24h keeps Binance and Coinbase at the same density and remains below both venues' limits.
+- The global persisted range defaults to 24h and unknown stored strings fall back to 24h. Range is included in both `ChartRequestToken` and `ChartSeries`, so a response from an earlier selection cannot overwrite a current selection.
+- The 7d X axis will use date-plus-time labels because a date alone loses the intra-day distinction while a time alone risks repeating across days; 24h keeps time-only labels and 30d uses dates.
+- The accepted baseline mismatch remains deliberate: `points.first?.close` is the opening close of the selected chart series, while the row percentage remains the ticker's 24h value. No annotation or arithmetic change is added.
+
+### UI22 implementation and verification
+- `ChartRange` is persisted as the stable raw values `24h`, `7d`, and `30d`; missing and unknown strings normalize to `.hours24` without recovery, and the fresh seed/migration use the same default.
+- Binance and Coinbase candle requests derive interval, limit, and granularity from the same range instance. `normalizedCandles` remains gap-preserving and now has direct pure coverage at all three range granularities for filtering and duplicate-bucket replacement.
+- Range is included in request tokens and series. Changing the global selection clears and refreshes the displayed series; tokens also require the selected persisted range, preventing late responses from an earlier range from landing.
+- The X-axis uses time-only labels at 24h, abbreviated date-plus-time at 7d, and abbreviated date-only at 30d. The chart disclosure and unavailable state use the selected series/global range instead of hardcoding 24h.
+- `bash scripts/run-tests.sh`: 37 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh` passed strict compilation, plist lint, signing verification, linkage, and bundled-icon checks.
+- No Aqua GUI session or live network access was available. Desktop review remains necessary for each range's actual fetch/drawing, rapid range switches, and 30d X-axis readability.
+
+## UI23: range-derived chart gaps and reclaimed height
+- The old `5_400`-second split threshold encoded 1.5 hours, which was valid only for the previous 1h series. At 7d and 30d it classified every normal 6h/1d interval as a gap, leaving every segment with one point and therefore drawing no line or fill.
+- `ChartGapCalculator` now uses `1.5 * ChartRange.coinbaseGranularity`. A single normal bucket remains connected; a missing bucket represented by two bucket intervals breaks the line for all three ranges. The existing per-segment fill and stroke behavior is unchanged.
+- The detail region now receives 40% of the finite `GeometryReader` height, leaving 60% for the list. This is a proportion of the actual available panel region rather than a guessed chart/content height. The normal `ViewThatFits` branch still lets the chart fill the remaining space after naturally sized controls; its existing scroll fallback and 140-point chart floor preserve reachability when Extra Large text cannot fit the full stack.
+
+### UI23 implementation and verification
+- `Sources/BitPrice/Views.swift` changed only the pure gap helper, segment split call, and list/detail height proportion.
+- `Tests/TestMain.swift` adds normal-spacing and missing-bucket assertions for 24h, 7d, and 30d; all ui22 range tests remain unchanged and pass.
+- `bash scripts/run-tests.sh`: 38 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh` passed strict compilation, plist lint, signing verification, linkage, and bundled-icon checks.
+- No Aqua GUI session was available. Desktop review remains necessary for visible 7d/30d lines and fills, genuine 24h gap breaks, and the shorter detail/taller list balance at Extra Large.

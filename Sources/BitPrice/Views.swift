@@ -260,6 +260,16 @@ enum AlertDefaultPickerOptions {
     }
 }
 
+enum ChartGapCalculator {
+    static func threshold(for range: ChartRange) -> TimeInterval {
+        TimeInterval(range.coinbaseGranularity) * 1.5
+    }
+
+    static func isGap(from previous: Date, to current: Date, range: ChartRange) -> Bool {
+        current.timeIntervalSince(previous) > threshold(for: range)
+    }
+}
+
 /// Presentation-only axis values derived from the chart points themselves.
 ///
 /// Keeping this calculation separate from drawing makes the flat and sparse
@@ -376,6 +386,25 @@ enum ChartAxisCalculator {
         if let middle, middle > start, middle < end { ticks.append(middle) }
         ticks.append(end)
         return ticks
+    }
+
+    /// A label that identifies a tick without restating what the range already
+    /// says. `.abbreviated` keeps the year in several locales — "2026年8月12日"
+    /// in Chinese — which is redundant inside a month-long window and wide
+    /// enough that three labels collide. Month and day are requested
+    /// explicitly instead, so the locale still orders and punctuates them.
+    ///
+    /// A 30-day window can straddle a year boundary, where this prints 12/28
+    /// then 1/15 with nothing naming the year. That is accepted: the month
+    /// going backwards is itself the signal, and the range control already says
+    /// how wide the window is.
+    static func timeLabel(for date: Date, range: ChartRange) -> String {
+        switch range {
+        case .hours24:
+            date.formatted(date: .omitted, time: .shortened)
+        case .days7, .days30:
+            date.formatted(.dateTime.month(.defaultDigits).day())
+        }
     }
 
     static func priceFraction(_ value: Decimal, minimum: Decimal, maximum: Decimal) -> Double {
@@ -562,9 +591,7 @@ struct ContentView: View {
     }
 
     private func detailHeight(for availableHeight: CGFloat) -> CGFloat {
-        let minimumListHeight: CGFloat = 180
-        let requestedHeight = max(300, availableHeight * 0.5)
-        return min(requestedHeight, max(0, availableHeight - minimumListHeight - 1))
+        availableHeight * 0.4
     }
 }
 
@@ -1032,13 +1059,23 @@ private struct SelectedCoinDetail: View {
                 .help("Remove \(item.symbol)")
             }
 
+            Picker("", selection: chartRangeBinding) {
+                ForEach(ChartRange.allCases, id: \.self) { range in
+                    Text(range.rawValue).tag(range)
+                }
+            }
+            .pickerStyle(.segmented)
+            .panelFont(.body)
+            .labelsHidden()
+            .accessibilityLabel("Chart time range")
+
             if let chart = model.charts[item.id] {
                 Sparkline(series: chart, color: chartColor, baselineColor: chartBaselineColor)
                     .frame(
                         minHeight: Self.minimumChartHeight,
                         maxHeight: chartFillsAvailableHeight ? .infinity : nil
                     )
-                Text("24h chart · \(chart.source.rawValue.capitalized)/\(chart.quoteAsset)")
+                Text("\(chart.range.rawValue) chart · \(chart.source.rawValue.capitalized)/\(chart.quoteAsset)")
                     .panelFont(.body)
                     .foregroundStyle(.secondary)
                 if chart.latestRefreshFailed {
@@ -1047,7 +1084,7 @@ private struct SelectedCoinDetail: View {
                         .foregroundStyle(.orange)
                 }
             } else {
-                Label("24h chart unavailable", systemImage: "chart.xyaxis.line")
+                Label("\(model.persistedState.chartRange.rawValue) chart unavailable", systemImage: "chart.xyaxis.line")
                     .panelFont(.body)
                     .foregroundStyle(.secondary)
                     .frame(
@@ -1059,6 +1096,17 @@ private struct SelectedCoinDetail: View {
 
             mappingDetails
         }
+        .onAppear { model.refreshChartIfNeeded(for: item.id) }
+    }
+
+    private var chartRangeBinding: Binding<ChartRange> {
+        Binding(
+            get: { model.persistedState.chartRange },
+            set: { range in
+                do { try model.setChartRange(range, for: item.id) }
+                catch { /* AppModel retains the durable error surface. */ }
+            }
+        )
     }
 
     private var itemIndex: Int? {
@@ -1253,7 +1301,7 @@ private struct Sparkline: View {
             context.stroke(mark, with: .color(.secondary.opacity(0.45)), lineWidth: 1)
 
             let label = context.resolve(
-                Text(tick.formatted(date: .omitted, time: .shortened))
+                Text(ChartAxisCalculator.timeLabel(for: tick, range: series.range))
                     .font(PanelFont.scaledFont(.body, preference: panelTextSize))
                     .foregroundColor(.secondary)
             )
@@ -1374,7 +1422,7 @@ private struct Sparkline: View {
                 y: plotRect.maxY - plotRect.height * yFraction
             )
             if let previousDate,
-               point.bucketStart.timeIntervalSince(previousDate) > 5_400 {
+               ChartGapCalculator.isGap(from: previousDate, to: point.bucketStart, range: series.range) {
                 drawSegment(context: context, points: segment, plotRect: plotRect, color: color)
                 segment.removeAll(keepingCapacity: true)
             }

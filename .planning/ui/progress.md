@@ -484,3 +484,36 @@
 - Updated test 22d for retained 45-second and 2.5-percent options, exact values, on-list no-custom behavior, and one-custom-only behavior.
 - `bash scripts/run-tests.sh`: 34 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, linkage, and bundled icon checks.
 - No Aqua GUI session was available; desktop interaction review remains necessary for cross-selection restoration, re-seeding after leaving/re-entering Settings, and Extra Large segment fit.
+
+## UI22 session: 2026-08-15
+
+### Phase 47: Inspect and plan selectable chart ranges
+- **Status:** complete
+- Read the planning records and all requested chart, persistence, model, REST, view, test, and build files. The existing chart request/token/task flow is per item, while the persisted selection is global.
+- Chose a single `ChartRange` table for lookback, Binance interval/limit, Coinbase granularity, and candle count. Recorded Coinbase's granularity constraint, the 7d date-plus-time X-axis choice, and the deliberate baseline mismatch.
+
+### Phase 48: Implement chart range plumbing
+- **Status:** complete
+- Added the schema-1 defaulted range, request/series token field, venue request parameters, and immediate displayed-range refresh path.
+
+### Phase 49: Add range-aware chart presentation and tests
+- **Status:** complete
+- Added the inline segmented selector, range-aware X-axis/disclosure labels, selection-safe refresh handling, persistence fallback coverage, range table/legality tests, and normalization coverage at all three granularities.
+
+### Phase 50: Verify and record UI22
+- **Status:** complete
+- `bash scripts/run-tests.sh`: 37 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh`: passed strict Swift 6 warnings-as-errors, plist lint, signing verification, linkage, and bundled icon checks.
+- Forbidden-API, fixed-font, picker-style, and single-source range audits passed. No live network or Aqua visual verification was possible; desktop checks remain recorded in findings.
+
+## UI23 session: 2026-08-15
+
+### Phase 51: Fix range-dependent line splitting and reclaim list space
+- **Status:** complete
+- Replaced the stale 5,400-second drawing-path threshold with a pure `ChartGapCalculator` based on 1.5 times the selected range's bucket duration.
+- Changed the finite list/detail split to a 40% detail proportion and 60% list proportion. Existing axis math, true bounds, baseline, fill segmentation, chart floor, and row styling remain unchanged.
+
+### Phase 52: Verify and record UI23
+- **Status:** complete
+- Added gap tests for normal and missing bucket spacing at every chart range. `bash scripts/run-tests.sh`: 38 passed, 0 failed, 2 expected no-Aqua skips.
+- `bash scripts/build-app.sh` passed strict Swift 6 warnings-as-errors, plist lint, signing verification, linkage, and bundled icon checks. Forbidden-token and bare-5,400 audits passed.
+- No Aqua GUI session was available; desktop visual verification remains necessary for 7d/30d drawing, 24h real-gap behavior, and Extra Large layout balance.

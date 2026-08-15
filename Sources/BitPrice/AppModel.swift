@@ -200,6 +200,27 @@ final class AppModel: ObservableObject, BinanceFeedSink {
         }
     }
 
+    func setChartRange(_ range: ChartRange, for itemID: UUID) throws {
+        guard persistedState.chartRange != range else { return }
+        do {
+            try commitEdit { draft in
+                draft.chartRange = range
+            }
+        } catch {
+            lastError = error.localizedDescription
+            throw error
+        }
+        lastError = nil
+        charts[itemID] = nil
+        refreshChart(itemID: itemID)
+    }
+
+    func refreshChartIfNeeded(for itemID: UUID) {
+        guard charts[itemID]?.range != persistedState.chartRange,
+              chartTasks[itemID] == nil else { return }
+        refreshChart(itemID: itemID)
+    }
+
     func saveAlert(itemID: UUID, proposed: PriceAlert?) throws {
         var shouldRequestPermission = false
         try commitEdit { draft in
@@ -525,10 +546,11 @@ final class AppModel: ObservableObject, BinanceFeedSink {
               let selection = chartSelection(for: item) else { return }
         chartTasks[itemID]?.cancel()
         let end = wallClock.now()
-        let start = end.addingTimeInterval(-86_400)
+        let range = persistedState.chartRange
+        let start = end.addingTimeInterval(-range.lookbackSeconds)
         let token = ChartRequestToken(
             requestID: UUID(), itemID: itemID, venue: selection.venue, productID: selection.mapping.productID,
-            marketRevision: marketRevisions[itemID, default: 0], requestedStart: start, requestedEnd: end
+            range: range, marketRevision: marketRevisions[itemID, default: 0], requestedStart: start, requestedEnd: end
         )
         chartTokens[itemID] = token
         chartTasks[itemID] = Task { @MainActor [weak self] in
@@ -537,15 +559,20 @@ final class AppModel: ObservableObject, BinanceFeedSink {
                 let points: [CandlePoint]
                 switch token.venue {
                 case .binance:
-                    points = try await self.restClients.binanceCandles(productID: token.productID, start: start, end: end)
+                    points = try await self.restClients.binanceCandles(
+                        productID: token.productID, range: token.range, start: start, end: end
+                    )
                 case .coinbase:
-                    points = try await self.restClients.coinbaseCandles(productID: token.productID, start: start, end: end)
+                    points = try await self.restClients.coinbaseCandles(
+                        productID: token.productID, range: token.range, start: start, end: end
+                    )
                 }
                 guard self.chartTokens[itemID] == token,
                       self.chartTokenStillMatches(token),
                       self.marketRevisions[itemID, default: 0] == token.marketRevision else { return }
                 let series = ChartSeries(
                     source: token.venue, quoteAsset: selection.mapping.quoteAsset,
+                    range: token.range,
                     requestedStart: token.requestedStart, requestedEnd: token.requestedEnd,
                     points: points, receivedInstant: self.continuousClock.now(), latestRefreshFailed: false
                 )
@@ -575,6 +602,7 @@ final class AppModel: ObservableObject, BinanceFeedSink {
         guard let item = items.first(where: { $0.id == token.itemID }) else { return false }
         let mapping = token.venue == .binance ? item.binanceMapping : item.coinbaseMapping
         return mapping?.productID == token.productID &&
+            token.range == persistedState.chartRange &&
             token.requestedStart < token.requestedEnd
     }
 

@@ -36,6 +36,44 @@ enum TextSizePreference: String, Codable, CaseIterable, Hashable, Sendable {
     case extraLarge
 }
 
+enum ChartRange: String, Codable, CaseIterable, Hashable, Sendable {
+    case hours24 = "24h"
+    case days7 = "7d"
+    case days30 = "30d"
+
+    var lookbackSeconds: TimeInterval {
+        switch self {
+        case .hours24: 86_400
+        case .days7: 604_800
+        case .days30: 2_592_000
+        }
+    }
+
+    var binanceInterval: String {
+        switch self {
+        case .hours24: "15m"
+        case .days7: "6h"
+        case .days30: "1d"
+        }
+    }
+
+    var coinbaseGranularity: Int {
+        switch self {
+        case .hours24: 900
+        case .days7: 21_600
+        case .days30: 86_400
+        }
+    }
+
+    var candleCount: Int {
+        switch self {
+        case .hours24: 96
+        case .days7: 29
+        case .days30: 31
+        }
+    }
+}
+
 struct PriceAlert: Codable, Equatable, Sendable {
     var direction: AlertDirection
     var threshold: Decimal
@@ -62,6 +100,7 @@ struct PersistedState: Codable, Equatable, Sendable {
     var primaryItemID: UUID?
     var alertsEnabled: Bool = true
     var textSize: TextSizePreference = .medium
+    var chartRange: ChartRange = .hours24
     var defaultAlertCooldownSeconds: Int = 30
     var defaultAlertHysteresisPercent: Decimal = 10
 
@@ -95,6 +134,7 @@ struct PersistedState: Codable, Equatable, Sendable {
             primaryItemID: id,
             alertsEnabled: true,
             textSize: .medium,
+            chartRange: .hours24,
             defaultAlertCooldownSeconds: 30,
             defaultAlertHysteresisPercent: 10
         )
@@ -201,6 +241,7 @@ struct CandlePoint: Equatable, Sendable {
 struct ChartSeries: Equatable, Sendable {
     let source: Venue
     let quoteAsset: String
+    let range: ChartRange
     let requestedStart: Date
     let requestedEnd: Date
     let points: [CandlePoint]
@@ -249,6 +290,7 @@ struct ChartRequestToken: Equatable, Sendable {
     let itemID: UUID
     let venue: Venue
     let productID: String
+    let range: ChartRange
     let marketRevision: UInt64
     let requestedStart: Date
     let requestedEnd: Date

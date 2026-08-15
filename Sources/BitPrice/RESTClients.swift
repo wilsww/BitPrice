@@ -256,6 +256,14 @@ private enum JSONScalar: Decodable {
     }
 }
 
+func normalizedCandles(_ candidates: [CandlePoint], start: Date, end: Date) -> [CandlePoint] {
+    var unique: [Date: CandlePoint] = [:]
+    for point in candidates where point.bucketStart >= start && point.bucketStart <= end {
+        unique[point.bucketStart] = point
+    }
+    return unique.values.sorted { $0.bucketStart < $1.bucketStart }
+}
+
 actor RESTClients {
     private let transport: any HTTPTransport
     private let continuousClock: any ContinuousTimeSource
@@ -374,15 +382,15 @@ actor RESTClients {
         return CoinbaseQuoteValue(price: last, change: .percent((last - open) / open * 100))
     }
 
-    func binanceCandles(productID: String, start: Date, end: Date) async throws -> [CandlePoint] {
+    func binanceCandles(productID: String, range: ChartRange, start: Date, end: Date) async throws -> [CandlePoint] {
         try await binancePacer.acquire(priority: .candle, cost: 2)
         var components = URLComponents(string: "https://api.binance.com/api/v3/klines")!
         components.queryItems = [
             URLQueryItem(name: "symbol", value: productID),
-            URLQueryItem(name: "interval", value: "1h"),
+            URLQueryItem(name: "interval", value: range.binanceInterval),
             URLQueryItem(name: "startTime", value: String(Int64(start.timeIntervalSince1970 * 1_000))),
             URLQueryItem(name: "endTime", value: String(Int64(end.timeIntervalSince1970 * 1_000))),
-            URLQueryItem(name: "limit", value: "25")
+            URLQueryItem(name: "limit", value: String(range.candleCount))
         ]
         let response = try await load(url: try requireURL(components), priority: .candle)
         if response.statusCode == 429 || response.statusCode == 418 {
@@ -398,11 +406,11 @@ actor RESTClients {
         return normalizedCandles(candidates, start: start, end: end)
     }
 
-    func coinbaseCandles(productID: String, start: Date, end: Date) async throws -> [CandlePoint] {
+    func coinbaseCandles(productID: String, range: ChartRange, start: Date, end: Date) async throws -> [CandlePoint] {
         try await coinbasePacer.acquire(priority: .candle, cost: 1)
         var components = URLComponents(url: try coinbaseURL(productID: productID, suffix: "candles"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            URLQueryItem(name: "granularity", value: "3600"),
+            URLQueryItem(name: "granularity", value: String(range.coinbaseGranularity)),
             URLQueryItem(name: "start", value: Self.iso8601.string(from: start)),
             URLQueryItem(name: "end", value: Self.iso8601.string(from: end))
         ]
@@ -482,14 +490,6 @@ actor RESTClients {
         if let seconds = TimeInterval(value), seconds >= 0 { return seconds }
         if let date = Self.httpDate.date(from: value) { return max(0, date.timeIntervalSince(wallClock.now())) }
         return 60
-    }
-
-    private func normalizedCandles(_ candidates: [CandlePoint], start: Date, end: Date) -> [CandlePoint] {
-        var unique: [Date: CandlePoint] = [:]
-        for point in candidates where point.bucketStart >= start && point.bucketStart <= end {
-            unique[point.bucketStart] = point
-        }
-        return unique.values.sorted { $0.bucketStart < $1.bucketStart }
     }
 
     private static let iso8601: ISO8601DateFormatter = {

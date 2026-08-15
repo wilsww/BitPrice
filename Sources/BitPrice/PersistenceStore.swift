@@ -73,6 +73,7 @@ struct V1StateDTO: Codable, Equatable, Sendable {
     let primaryItemID: UUID?
     let alertsEnabled: Bool
     let textSize: String
+    let chartRange: String
     let defaultAlertCooldownSeconds: Int
     let defaultAlertHysteresisPercent: String
 
@@ -82,6 +83,7 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         case primaryItemID
         case alertsEnabled
         case textSize
+        case chartRange
         case defaultAlertCooldownSeconds
         case defaultAlertHysteresisPercent
     }
@@ -92,6 +94,7 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         primaryItemID: UUID?,
         alertsEnabled: Bool = true,
         textSize: String = TextSizePreference.medium.rawValue,
+        chartRange: String = ChartRange.hours24.rawValue,
         defaultAlertCooldownSeconds: Int = 30,
         defaultAlertHysteresisPercent: String = "10"
     ) {
@@ -100,6 +103,7 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         self.primaryItemID = primaryItemID
         self.alertsEnabled = alertsEnabled
         self.textSize = TextSizePreference(rawValue: textSize)?.rawValue ?? TextSizePreference.medium.rawValue
+        self.chartRange = ChartRange(rawValue: chartRange)?.rawValue ?? ChartRange.hours24.rawValue
         self.defaultAlertCooldownSeconds = defaultAlertCooldownSeconds
         self.defaultAlertHysteresisPercent = defaultAlertHysteresisPercent
     }
@@ -113,6 +117,9 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         let decodedTextSize = try container.decodeIfPresent(String.self, forKey: .textSize)
             ?? TextSizePreference.medium.rawValue
         textSize = TextSizePreference(rawValue: decodedTextSize)?.rawValue ?? TextSizePreference.medium.rawValue
+        let decodedChartRange = try container.decodeIfPresent(String.self, forKey: .chartRange)
+            ?? ChartRange.hours24.rawValue
+        chartRange = ChartRange(rawValue: decodedChartRange)?.rawValue ?? ChartRange.hours24.rawValue
         defaultAlertCooldownSeconds = try container.decodeIfPresent(Int.self, forKey: .defaultAlertCooldownSeconds) ?? 30
         defaultAlertHysteresisPercent = try container.decodeIfPresent(String.self, forKey: .defaultAlertHysteresisPercent) ?? "10"
     }
@@ -128,6 +135,7 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         }
         try container.encode(alertsEnabled, forKey: .alertsEnabled)
         try container.encode(textSize, forKey: .textSize)
+        try container.encode(chartRange, forKey: .chartRange)
         try container.encode(defaultAlertCooldownSeconds, forKey: .defaultAlertCooldownSeconds)
         try container.encode(defaultAlertHysteresisPercent, forKey: .defaultAlertHysteresisPercent)
     }
@@ -160,6 +168,7 @@ func migrateV0ToV1(_ old: V0StateDTO) -> V1StateDTO {
         primaryItemID: old.primaryItemID,
         alertsEnabled: true,
         textSize: TextSizePreference.medium.rawValue,
+        chartRange: ChartRange.hours24.rawValue,
         defaultAlertCooldownSeconds: 30,
         defaultAlertHysteresisPercent: "10"
     )
@@ -312,6 +321,7 @@ final class PersistenceStore {
             primaryItemID: state.primaryItemID,
             alertsEnabled: state.alertsEnabled,
             textSize: state.textSize.rawValue,
+            chartRange: state.chartRange.rawValue,
             defaultAlertCooldownSeconds: state.defaultAlertCooldownSeconds,
             defaultAlertHysteresisPercent: decimalString(state.defaultAlertHysteresisPercent)
         )
@@ -352,6 +362,7 @@ final class PersistenceStore {
             primaryItemID: dto.primaryItemID,
             alertsEnabled: dto.alertsEnabled,
             textSize: TextSizePreference(rawValue: dto.textSize) ?? .medium,
+            chartRange: ChartRange(rawValue: dto.chartRange) ?? .hours24,
             defaultAlertCooldownSeconds: dto.defaultAlertCooldownSeconds,
             defaultAlertHysteresisPercent: defaultAlertHysteresisPercent
         )
