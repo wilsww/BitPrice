@@ -331,3 +331,32 @@ Complete
 - The baseline is marked by a compact filled diamond and shared-precision value; its tooltip preserves the lost explanatory words without widening the axis or adding an in-plot label.
 - Settings identity now has intrinsic height and sits directly above the closing disclosure, with the existing flexible spacer above and negative layout priority preserved.
 - Strict tests/build and source-scope audits passed. Desktop visual confirmation remains outstanding because the host has no Aqua GUI session.
+
+## UI17 completion
+- [x] Read the current Settings, persistence, domain, notification, test, and build context.
+- [x] Add system-authoritative login-item and notification-permission status with inline guidance and no notification-service changes.
+- [x] Add schema-1 default alert cooldown/hysteresis persistence, validation, migration, and new-alert seeding.
+- [x] Add persistence acceptance tests and run the strict test/build/audit checks.
+- [x] Record the ad-hoc-signing and no-Aqua limitations for desktop review.
+
+## UI18 completion
+- [x] Read the current Settings card, persistence defaults, validation, tests, and build context.
+- [x] Replace Alert defaults text fields/Save action with immediate bounded Steppers while preserving untouched off-step values.
+- [x] Change fresh, missing-key, and migrated defaults to 30 seconds / 10 percent without changing schema version or existing alerts.
+- [x] Add pure step arithmetic tests, update persistence assertions, run strict tests/build/audits, and record desktop-only risks.
+
+## UI19 completion
+- [x] Read the Alert defaults card and relevant project/build context.
+- [x] Replace the two rows with a three-column content-sized Grid and preserve action-based stepping/accessibility.
+- [x] Run the unchanged test suite, strict build, bundle checks, forbidden-token audit, and record desktop-only layout checks.
+
+## UI20 completion
+- [x] Read the current Alert defaults picker/card, persistence, tests, and build context.
+- [x] Replace the Grid/Steppers with explicit segmented cooldown/hysteresis pickers and exact custom off-list options.
+- [x] Remove dead stepper helpers/tests, add pure picker-option tests, preserve immediate persistence/schema/defaults, and verify strict build/tests/audits.
+
+## UI21 completion
+- [x] Read the current Alert defaults picker helper, Settings appearance/persistence path, and test 22d.
+- [x] Retain each appearance-derived custom option in `@State` for the Settings screen lifetime without writing on appearance or changing the persisted schema.
+- [x] Update pure option tests for cross-selection retention, exact custom values, on-list absence, and one-custom-only behavior.
+- [x] Run strict tests/build, bundle and forbidden-token audits, and record the no-Aqua desktop checks.

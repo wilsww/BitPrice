@@ -194,3 +194,55 @@
 - Tick selection is performed from `plotHeight` before any width-dependent geometry. Each selected axis label is resolved with the exact panel-size font and measured unconstrained; the widest measured result plus the existing 9-point label gap determines the left inset.
 - The measured inset is capped at 40% of the available Canvas width, leaving at least the remaining 60% (minus the existing right reserve) for the plot. If the cap binds at a narrow panel or pathological precision, the same measured label text is shortened with an ellipsis inside the capped label width; font size and shared numeric precision are not changed.
 - The measurement cannot be isolated into a platform-independent pure test without replacing the authoritative `ResolvedText.measure(in:)` operation, so no hollow width test was added. Existing axis value tests remain unchanged.
+
+## UI17: login item, alert defaults, and notification status
+- Launch-at-login state is read from `SMAppService.mainApp.status` every time Settings appears and after every register/unregister attempt. `.requiresApproval` and unknown statuses stay visibly distinct from a registered item, with inline System Settings guidance rather than a retry or an alert. Unsigned or ad-hoc-signed development builds may report different login-item behavior than distributed builds; re-reading the system status keeps the control honest in either case.
+- Global cooldown and hysteresis defaults are persisted as additive root-level v1 fields. Hysteresis remains a decimal string on the wire, both defaults are validated with the per-alert bounds, and changing them seeds only new alerts; existing alerts are not rewritten. Missing v1 keys and v0 migrations use zero defaults.
+- Notification permission is read-only Settings presentation state. A nonisolated async helper creates and consumes the notification center/settings on the executor it is already using, then only a small sendable status enum crosses back to the main-actor view. No authorization request or notification submission was added, and `NotificationService.swift` remains untouched.
+
+### UI17 implementation and verification
+- Added the three Settings cards/lines through the existing inline panel route and central font helper. The login and notification values are not mirrored into persistence.
+- Added persistence coverage for missing fields, v0 migration defaults, custom round trips, decimal-string encoding, and invalid bounds. The strict suite reports 33 passed, 0 failed, and 2 expected no-Aqua skips.
+- The strict app build passed and linked ServiceManagement and UserNotifications automatically; plist, signing, linkage, and bundled-icon checks passed.
+- No Aqua GUI session was available. A human desktop check remains necessary for actual login-item status changes, notification wording at each system permission state, and the added card density at Small and Extra Large sizes.
+
+## UI18: bounded alert-default steppers
+- The Alert defaults card now uses inline action-based `Stepper` controls. The handlers enforce cooldown `0...604_800` in 30-second increments and hysteresis `0...99` in one-percent increments, while keeping the stored file bounds as an independent validation guard.
+- A stored off-step or fractional value is not normalized during Settings appearance. `AlertDefaultStepper.nextValue` rounds toward the next multiple only in the direction of an actual press: 12.5 becomes 13/12, and 45 seconds becomes 60/30. The card persists immediately through `model.commitEdit`; a failed write restores the displayed values from the model and surfaces `localError`.
+- Shipped and missing-key defaults are now consistently 30 seconds and 10 percent across `PersistedState`, V1 decoding/memberwise defaults, fresh seed, and V0 migration. Existing per-alert values are untouched.
+
+### UI18 implementation and verification
+- Removed the free-text fields, Save defaults button, parsing, and UI-side manual range checks; the existing `validatePersistedState` bounds remain unchanged.
+- Added pure arithmetic tests for fractional and exact hysteresis values plus an off-step cooldown.
+- `bash scripts/run-tests.sh`: 34 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, linkage, and bundled icon checks.
+- No Aqua GUI session was available. A human desktop check remains necessary for the visual affordance of the Stepper buttons and for confirming fractional/off-step values remain readable before interaction.
+
+## UI19: aligned Alert defaults grid
+- Replaced the two `LabeledContent` rows with a three-column `Grid`: leading labels, trailing bold monospaced-digit values, and arrow-only action Steppers. Grid column alignment and 8-point spacing provide content-derived layout without a guessed value width.
+- The visible label/value texts are hidden from accessibility because each Stepper retains the complete existing label and current value. This prevents VoiceOver from announcing the number twice while keeping the controls named.
+- The action callbacks, step sizes, bounds, persistence behavior, shipped defaults, and per-alert editor were not changed.
+
+### UI19 implementation and verification
+- Only `Sources/BitPrice/Views.swift` changed for the implementation. No test was added because this is a pure layout change; the existing 34-test suite, including all `AlertDefaultStepper` arithmetic tests, remains unchanged and passes.
+- No Aqua GUI session was available. A human desktop check must confirm the stepper arrows hold position from cooldown `0` through `604800`, both rows align, and the card fits at Extra Large.
+
+## UI20: fixed-option Alert defaults pickers
+- The Grid/Stepper layout was replaced because content-sized columns still changed the card width as values changed, and reaching a one-hour cooldown through 30-second presses was impractical.
+- Cooldown and hysteresis now use explicit segmented options. `AlertDefaultPickerOptions.options` returns the unchanged standard list for on-list values; for an off-list stored value it prepends exactly one selected custom option formatted with `decimalString`, preserving the exact Decimal. Selecting a standard tag changes the state and removes the custom option; appearance only computes options and never writes.
+- Both new pickers explicitly use `.pickerStyle(.segmented)` and retain immediate commit/error-revert behavior. The old step direction/stepper helper and its arithmetic test were removed rather than retained as dead code.
+
+### UI20 implementation and verification
+- `Sources/BitPrice/Views.swift` and `Tests/TestMain.swift` are the only implementation/test files changed for this pass. The new pure tests cover on-list defaults, 45-second/2.5-percent custom labels and exact values, and standard-option counts.
+- `bash scripts/run-tests.sh`: 34 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, linkage, and bundled icon checks.
+- No Aqua GUI session was available. A human desktop check remains necessary for width stability, seven cooldown segments with a custom value at Extra Large, and custom-segment disappearance after standard selection.
+
+## UI21: retained Alert defaults custom segments
+- The custom picker option must be derived from the persisted value once when Settings appears, not from the live picker selection. `@State` retains that option while the screen is visible, so choosing a standard value does not destroy an off-list value that the user may want to restore.
+- The retained option is presentation-only and is reseeded on the next Settings appearance from the then-current persisted value. Opening Settings does not write, and selecting the retained option passes its original `Decimal` through the existing binding and commit path without re-parsing or rounding.
+- A nil retained option produces exactly the standard list, so shipped on-list defaults do not create custom segments. The pure option tests also assert that a retained list has only one non-standard option and that its value remains exact.
+
+### UI21 implementation and verification
+- `Sources/BitPrice/Views.swift` now holds one retained custom option per Alert defaults picker, seeds them in the existing appearance refresh, and renders options from retained state rather than live values.
+- `Tests/TestMain.swift` updates test 22d for cross-selection retention, exact custom values, on-list appearance, and single-custom-list behavior.
+- The strict test suite passed with 34 tests and 2 expected no-Aqua skips. The strict app build passed, including plist lint, code-sign verification, linkage, and the bundled icon check.
+- No Aqua GUI session was available. Desktop review remains necessary to confirm the retained segment survives actual 45s → 1m → 45s interaction, disappears after leaving and returning with 60s stored, and remains usable at Extra Large.

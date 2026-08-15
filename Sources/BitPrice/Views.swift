@@ -1,5 +1,7 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
+import UserNotifications
 
 /// Which editor the panel is currently showing.
 ///
@@ -120,6 +122,141 @@ private struct PanelFontModifier: ViewModifier {
 private extension View {
     func panelFont(_ style: Font.TextStyle, weight: Font.Weight? = nil) -> some View {
         modifier(PanelFontModifier(style: style, weight: weight))
+    }
+}
+
+private enum LoginItemStatus: Equatable, Sendable {
+    case enabled
+    case notRegistered
+    case requiresApproval
+    case unknown
+
+    init(systemStatus: SMAppService.Status) {
+        switch systemStatus {
+        case .enabled:
+            self = .enabled
+        case .notRegistered:
+            self = .notRegistered
+        case .requiresApproval:
+            self = .requiresApproval
+        case .notFound:
+            self = .unknown
+        @unknown default:
+            self = .unknown
+        }
+    }
+
+    var isEnabled: Bool { self == .enabled }
+
+    var statusMessage: String? {
+        switch self {
+        case .requiresApproval:
+            "Enable BitPrice in System Settings › General › Login Items."
+        case .unknown:
+            "Login-item status is unknown. Check System Settings › General › Login Items."
+        case .enabled, .notRegistered:
+            nil
+        }
+    }
+}
+
+private enum NotificationPermissionStatus: Equatable, Sendable {
+    case authorized
+    case provisional
+    case denied
+    case notDetermined
+    case unknown
+
+    init(systemStatus: UNAuthorizationStatus) {
+        switch systemStatus {
+        case .authorized:
+            self = .authorized
+        case .provisional:
+            self = .provisional
+        case .denied:
+            self = .denied
+        case .notDetermined:
+            self = .notDetermined
+        @unknown default:
+            self = .unknown
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .authorized:
+            "macOS notifications are authorized and can be delivered."
+        case .provisional:
+            "macOS notifications are provisionally authorized and can be delivered."
+        case .denied:
+            "macOS is blocking notifications. Enable them in System Settings › Notifications › BitPrice."
+        case .notDetermined:
+            "Notification permission has not been requested; it is requested when an alert first needs to fire."
+        case .unknown:
+            "Notification permission status is unknown."
+        }
+    }
+
+    var isWarning: Bool {
+        switch self {
+        case .denied, .unknown:
+            true
+        case .authorized, .provisional, .notDetermined:
+            false
+        }
+    }
+}
+
+private enum NotificationPermissionReader {
+    static func read() async -> NotificationPermissionStatus {
+        // This helper stays nonisolated so the center and its non-Sendable
+        // settings result remain together on this async executor. Only the
+        // small Sendable status crosses back to the main-actor view.
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        return NotificationPermissionStatus(systemStatus: settings.authorizationStatus)
+    }
+}
+
+struct AlertDefaultPickerOption: Equatable, Hashable, Sendable {
+    let label: String
+    let value: Decimal
+}
+
+enum AlertDefaultPickerOptions {
+    static let cooldown: [AlertDefaultPickerOption] = [
+        AlertDefaultPickerOption(label: "Off", value: 0),
+        AlertDefaultPickerOption(label: "30s", value: 30),
+        AlertDefaultPickerOption(label: "1m", value: 60),
+        AlertDefaultPickerOption(label: "5m", value: 300),
+        AlertDefaultPickerOption(label: "15m", value: 900),
+        AlertDefaultPickerOption(label: "1h", value: 3_600)
+    ]
+
+    static let hysteresis: [AlertDefaultPickerOption] = [
+        AlertDefaultPickerOption(label: "0%", value: 0),
+        AlertDefaultPickerOption(label: "1%", value: 1),
+        AlertDefaultPickerOption(label: "2%", value: 2),
+        AlertDefaultPickerOption(label: "5%", value: 5),
+        AlertDefaultPickerOption(label: "10%", value: 10)
+    ]
+
+    static func customOptionIfOffList(
+        stored: Decimal,
+        standard: [AlertDefaultPickerOption],
+        suffix: String
+    ) -> AlertDefaultPickerOption? {
+        guard !standard.contains(where: { $0.value == stored }) else { return nil }
+        return AlertDefaultPickerOption(label: "\(decimalString(stored))\(suffix)", value: stored)
+    }
+
+    static func options(
+        retainedCustom: AlertDefaultPickerOption?,
+        standard: [AlertDefaultPickerOption]
+    ) -> [AlertDefaultPickerOption] {
+        guard let retainedCustom,
+              !standard.contains(where: { $0.value == retainedCustom.value }) else { return standard }
+        return [retainedCustom] + standard
     }
 }
 
@@ -435,6 +572,12 @@ private struct SettingsView: View {
     @ObservedObject var model: AppModel
     let close: () -> Void
     @State private var localError: String?
+    @State private var loginItemStatus: LoginItemStatus = .unknown
+    @State private var notificationPermissionStatus: NotificationPermissionStatus = .unknown
+    @State private var defaultCooldown = 30
+    @State private var defaultHysteresis: Decimal = 10
+    @State private var retainedCooldownCustom: AlertDefaultPickerOption?
+    @State private var retainedHysteresisCustom: AlertDefaultPickerOption?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -471,6 +614,52 @@ private struct SettingsView: View {
                     Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
                         .panelFont(.body)
                         .foregroundStyle(.secondary)
+                    Text(notificationPermissionStatus.message)
+                        .panelFont(.body)
+                        .foregroundStyle(notificationPermissionStatus.isWarning ? Color.orange : Color.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Alert defaults")
+                        .panelFont(.headline, weight: .bold)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Cooldown")
+                            .panelFont(.body)
+                        Picker("", selection: cooldownBinding) {
+                            ForEach(AlertDefaultPickerOptions.options(
+                                retainedCustom: retainedCooldownCustom,
+                                standard: AlertDefaultPickerOptions.cooldown
+                            ), id: \.self) { option in
+                                Text(option.label).tag(NSDecimalNumber(decimal: option.value).intValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .panelFont(.body)
+                        .accessibilityLabel("Cooldown")
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Hysteresis percent")
+                            .panelFont(.body)
+                        Picker("", selection: hysteresisBinding) {
+                            ForEach(AlertDefaultPickerOptions.options(
+                                retainedCustom: retainedHysteresisCustom,
+                                standard: AlertDefaultPickerOptions.hysteresis
+                            ), id: \.self) { option in
+                                Text(option.label).tag(option.value)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .panelFont(.body)
+                        .accessibilityLabel("Hysteresis percent")
+                    }
+                    Text("Changes seed new alerts only; existing alerts are unchanged.")
+                        .panelFont(.body)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -495,6 +684,27 @@ private struct SettingsView: View {
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Launch at login")
+                        .panelFont(.headline, weight: .bold)
+                    Toggle("", isOn: launchAtLoginBinding)
+                        .panelFont(.headline)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .accessibilityLabel("Launch BitPrice at login")
+                    if let statusMessage = loginItemStatus.statusMessage {
+                        Text(statusMessage)
+                            .panelFont(.body)
+                            .foregroundStyle(.orange)
+                    }
+                    Text("Start BitPrice automatically when you sign in.")
+                        .panelFont(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             }
 
             Spacer(minLength: 14)
@@ -511,6 +721,100 @@ private struct SettingsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear {
+            refreshLoginItemStatus()
+            refreshNotificationPermissionStatus()
+            refreshDefaultFields()
+            seedDefaultPickerOptions()
+        }
+    }
+
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { loginItemStatus.isEnabled },
+            set: { enabled in setLaunchAtLogin(enabled) }
+        )
+    }
+
+    private func refreshLoginItemStatus() {
+        loginItemStatus = LoginItemStatus(systemStatus: SMAppService.mainApp.status)
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        if enabled && loginItemStatus == .requiresApproval {
+            refreshLoginItemStatus()
+            return
+        }
+        do {
+            if enabled {
+                _ = try SMAppService.mainApp.register()
+            } else {
+                _ = try SMAppService.mainApp.unregister()
+            }
+            localError = nil
+        } catch {
+            localError = error.localizedDescription
+        }
+        refreshLoginItemStatus()
+    }
+
+    private func refreshNotificationPermissionStatus() {
+        Task { @MainActor in
+            notificationPermissionStatus = await NotificationPermissionReader.read()
+        }
+    }
+
+    private func refreshDefaultFields() {
+        defaultCooldown = model.persistedState.defaultAlertCooldownSeconds
+        defaultHysteresis = model.persistedState.defaultAlertHysteresisPercent
+    }
+
+    private func seedDefaultPickerOptions() {
+        retainedCooldownCustom = AlertDefaultPickerOptions.customOptionIfOffList(
+            stored: Decimal(model.persistedState.defaultAlertCooldownSeconds),
+            standard: AlertDefaultPickerOptions.cooldown,
+            suffix: "s"
+        )
+        retainedHysteresisCustom = AlertDefaultPickerOptions.customOptionIfOffList(
+            stored: model.persistedState.defaultAlertHysteresisPercent,
+            standard: AlertDefaultPickerOptions.hysteresis,
+            suffix: "%"
+        )
+    }
+
+    private var cooldownBinding: Binding<Int> {
+        Binding(
+            get: { defaultCooldown },
+            set: { value in
+                guard value != defaultCooldown else { return }
+                defaultCooldown = value
+                persistDefaultAlertValues()
+            }
+        )
+    }
+
+    private var hysteresisBinding: Binding<Decimal> {
+        Binding(
+            get: { defaultHysteresis },
+            set: { value in
+                guard value != defaultHysteresis else { return }
+                defaultHysteresis = value
+                persistDefaultAlertValues()
+            }
+        )
+    }
+
+    private func persistDefaultAlertValues() {
+        do {
+            try model.commitEdit { draft in
+                draft.defaultAlertCooldownSeconds = defaultCooldown
+                draft.defaultAlertHysteresisPercent = defaultHysteresis
+            }
+            localError = nil
+        } catch {
+            localError = error.localizedDescription
+            refreshDefaultFields()
+        }
     }
 
     private var appIdentityBlock: some View {
@@ -1368,8 +1672,11 @@ private struct AlertEditorView: View {
         _enabled = State(initialValue: alert?.isEnabled ?? false)
         _direction = State(initialValue: alert?.direction ?? .above)
         _threshold = State(initialValue: alert.map { decimalString($0.threshold) } ?? "")
-        _cooldown = State(initialValue: String(alert?.cooldownSeconds ?? 0))
-        _hysteresis = State(initialValue: alert.map { decimalString($0.hysteresisPercent) } ?? "0")
+        _cooldown = State(initialValue: String(alert?.cooldownSeconds ?? model.persistedState.defaultAlertCooldownSeconds))
+        _hysteresis = State(
+            initialValue: alert.map { decimalString($0.hysteresisPercent) }
+                ?? decimalString(model.persistedState.defaultAlertHysteresisPercent)
+        )
     }
 
     var body: some View {

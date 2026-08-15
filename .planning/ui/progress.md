@@ -420,3 +420,67 @@
 - `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, `otool -L`, and bundled icon checks.
 - Forbidden-API/font and scope audits passed. No pure width test was added because exact measurement is tied to `ResolvedText.measure(in:)`.
 - No Aqua GUI session was available; desktop review remains necessary for measured whitespace and capped-label behavior at Small and Extra Large.
+
+## UI17 session: 2026-08-15
+
+### Phase 37: Add Settings system state and persisted alert defaults
+- **Status:** complete
+- Added system-authoritative launch-at-login and notification-permission reads without changing the notification service or adding a prompt/send path.
+- Added v1-defaulted cooldown and hysteresis fields through the domain, DTO, migration, persistence, validation, and new-alert editor seed path.
+
+### Phase 38: Verify and record UI17
+- **Status:** complete
+- Added acceptance coverage for missing fields, v0 migration defaults, custom round trips, decimal-string encoding, and invalid bounds.
+- `bash scripts/run-tests.sh`: 33 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, linkage, and bundled icon checks.
+- No Aqua GUI session was available; system Settings interactions and visual card layout remain desktop-only review items.
+
+## UI18 session: 2026-08-15
+
+### Phase 39: Replace alert-default text fields with immediate Steppers
+- **Status:** complete
+- Replaced both free-text controls and the Save button with bounded action-based Steppers. The pure step calculation preserves off-step and fractional values until a user action, then moves to the neighboring multiple.
+- Changed all shipped/missing-key/migration defaults consistently to 30 seconds and 10 percent. Existing alert values and the per-alert editor remain unchanged.
+
+### Phase 40: Verify and record UI18
+- **Status:** complete
+- Updated ui17 persistence assertions and added stepper arithmetic coverage for fractional, exact-integer, and off-step values.
+- `bash scripts/run-tests.sh`: 34 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, linkage, and bundled icon checks.
+- No Aqua GUI session was available; desktop visual review remains outstanding for Stepper affordance and value readability.
+
+## UI19 session: 2026-08-15
+
+### Phase 41: Align Alert defaults with a content-sized Grid
+- **Status:** complete
+- Replaced `LabeledContent` with two `GridRow`s containing leading labels, trailing bold monospaced values, and arrow-only action-based Steppers.
+- Preserved the existing accessibility label/value on each Stepper and hid the duplicate visible cells from VoiceOver.
+
+### Phase 42: Verify and record UI19
+- **Status:** complete
+- `bash scripts/run-tests.sh`: 34 passed, 0 failed, 2 expected no-Aqua skips; the ui18 arithmetic tests were untouched.
+- `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, `otool -L`, and bundled icon checks.
+- No Aqua GUI session was available; desktop review remains necessary for stable horizontal positions, row alignment, and Extra Large fit.
+
+## UI20 session: 2026-08-15
+
+### Phase 43: Replace Alert defaults Steppers with segmented pickers
+- **Status:** complete
+- Added fixed cooldown and hysteresis option lists with selected custom segments for off-list stored values, preserving exact values and avoiding writes on appearance.
+- Removed the ui18 stepper helper and replaced its test with pure picker-option tests. All picker controls added in the card use the segmented style.
+
+### Phase 44: Verify and record UI20
+- **Status:** complete
+- `bash scripts/run-tests.sh`: 34 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, `otool -L`, and bundled icon checks.
+- No Aqua GUI session was available; desktop review remains necessary for fixed card width, Extra Large custom-option fit, and custom-option removal after selection.
+
+## UI21 session: 2026-08-15
+
+### Phase 45: Retain Alert defaults custom options for the Settings lifetime
+- **Status:** complete
+- Added one `@State` custom option per picker and seeded it from the persisted value on Settings appearance. Picker rendering now uses the retained option list, so standard selections cannot make an off-list value disappear while the screen remains open.
+- Kept exact stored values and immediate `model.commitEdit` persistence; no appearance-time write, persistence field, schema, standard option, or AlertEditor change was introduced.
+
+### Phase 46: Verify and record UI21
+- **Status:** complete
+- Updated test 22d for retained 45-second and 2.5-percent options, exact values, on-list no-custom behavior, and one-custom-only behavior.
+- `bash scripts/run-tests.sh`: 34 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh`: passed with strict Swift 6 warnings-as-errors, plist lint, signing verification, linkage, and bundled icon checks.
+- No Aqua GUI session was available; desktop interaction review remains necessary for cross-selection restoration, re-seeding after leaving/re-entering Settings, and Extra Large segment fit.

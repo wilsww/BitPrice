@@ -275,6 +275,8 @@ struct BitPriceTests {
                 let store = try PersistenceStore(rootDirectory: root)
                 guard case .migrated(let state) = store.load() else { throw TestFailure(description: "v0 did not migrate") }
                 try expect(state.items[0].alert?.isArmed == false, "unknown legacy latch was armed")
+                try expect(state.defaultAlertCooldownSeconds == 30 && state.defaultAlertHysteresisPercent == 10,
+                           "v0 migration did not apply alert defaults")
                 try store.save(state)
                 guard case .loaded = store.load() else { throw TestFailure(description: "v1 reload failed") }
                 let v1Root = try temporaryRoot()
@@ -292,6 +294,8 @@ struct BitPriceTests {
                 }
                 object.removeValue(forKey: "alertsEnabled")
                 object.removeValue(forKey: "textSize")
+                object.removeValue(forKey: "defaultAlertCooldownSeconds")
+                object.removeValue(forKey: "defaultAlertHysteresisPercent")
                 let legacyV1 = try JSONSerialization.data(withJSONObject: object)
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
@@ -302,11 +306,17 @@ struct BitPriceTests {
                 }
                 try expect(state.alertsEnabled, "absent alertsEnabled did not default to on")
                 try expect(state.textSize == .medium, "absent textSize did not default to medium")
+                try expect(state.defaultAlertCooldownSeconds == 30 && state.defaultAlertHysteresisPercent == 10,
+                           "absent alert defaults did not use documented defaults")
                 try expect(!store.recoveryProtected, "valid v1 without alertsEnabled was protected")
                 let encoded = try store.encodedData(for: state)
                 let encodedObject = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
                 try expect(encodedObject?["alertsEnabled"] as? Bool == true, "alertsEnabled was not encoded")
                 try expect(encodedObject?["textSize"] as? String == "medium", "textSize was not encoded")
+                try expect(encodedObject?["defaultAlertCooldownSeconds"] as? Int == 30,
+                           "default cooldown was not encoded")
+                try expect(encodedObject?["defaultAlertHysteresisPercent"] as? String == "10",
+                           "default hysteresis was not encoded as a decimal string")
             },
             AcceptanceTest(name: "06c unrecognized text size defaults without recovery") {
                 let fixture = try Data(contentsOf: URL(fileURLWithPath: "Tests/Fixtures/watchlist-v1.json"))
@@ -336,6 +346,41 @@ struct BitPriceTests {
                     throw TestFailure(description: "saved textSize did not load")
                 }
                 try expect(reloaded.textSize == .extraLarge, "saved textSize changed during round trip")
+            },
+            AcceptanceTest(name: "06e alert defaults persist and validate") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                var state = PersistedState.bitcoinSeed()
+                state.defaultAlertCooldownSeconds = 300
+                state.defaultAlertHysteresisPercent = Decimal(string: "12.5")!
+                try store.save(state)
+                guard case .loaded(let reloaded) = store.load() else {
+                    throw TestFailure(description: "saved alert defaults did not load")
+                }
+                try expect(reloaded.defaultAlertCooldownSeconds == 300,
+                           "saved default cooldown changed during round trip")
+                try expect(reloaded.defaultAlertHysteresisPercent == Decimal(string: "12.5"),
+                           "saved default hysteresis changed during round trip")
+                let encoded = try store.encodedData(for: reloaded)
+                let encodedObject = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+                try expect(encodedObject?["defaultAlertCooldownSeconds"] as? Int == 300,
+                           "custom default cooldown was not encoded")
+                try expect(encodedObject?["defaultAlertHysteresisPercent"] as? String == "12.5",
+                           "custom default hysteresis was not encoded as a decimal string")
+
+                var invalidCooldown = state
+                invalidCooldown.defaultAlertCooldownSeconds = 604_801
+                do {
+                    try validatePersistedState(invalidCooldown)
+                    throw TestFailure(description: "out-of-range default cooldown was accepted")
+                } catch is ValidationFailure {}
+                var invalidHysteresis = state
+                invalidHysteresis.defaultAlertHysteresisPercent = 100
+                do {
+                    try validatePersistedState(invalidHysteresis)
+                    throw TestFailure(description: "out-of-range default hysteresis was accepted")
+                } catch is ValidationFailure {}
             },
             AcceptanceTest(name: "07 future unregistered-older dispatch path") {
                 try expect(schemaDispatch(version: 1, current: 2, registeredVersions: [0, 2]) == .unregisteredOlder,
@@ -879,6 +924,92 @@ struct BitPriceTests {
                 try expect(
                     PanelFont.pointSize(for: .body, preference: .medium) == base,
                     "medium derived font size does not equal its base size"
+                )
+            },
+            AcceptanceTest(name: "22d alert default picker options") {
+                let retainedCooldown = AlertDefaultPickerOption(label: "45s", value: 45)
+                let currentCooldown = 60
+                let cooldownOptions = AlertDefaultPickerOptions.options(
+                    retainedCustom: retainedCooldown,
+                    standard: AlertDefaultPickerOptions.cooldown
+                )
+                try expect(
+                    cooldownOptions.contains(where: { $0.value == Decimal(currentCooldown) }) &&
+                        cooldownOptions.first == retainedCooldown,
+                    "retained cooldown custom segment disappeared after selection"
+                )
+                try expect(
+                    cooldownOptions.first(where: { $0.label == "45s" })?.value == 45,
+                    "retained cooldown custom segment changed its exact value"
+                )
+                try expect(
+                    cooldownOptions.filter { option in
+                        !AlertDefaultPickerOptions.cooldown.contains(option)
+                    }.count == 1,
+                    "cooldown options contained more than one custom segment"
+                )
+                let customCooldown = AlertDefaultPickerOptions.customOptionIfOffList(
+                    stored: 45,
+                    standard: AlertDefaultPickerOptions.cooldown,
+                    suffix: "s"
+                )
+                try expect(
+                    customCooldown == retainedCooldown,
+                    "off-list cooldown custom segment was not formatted at appearance"
+                )
+                let onListCooldownCustom = AlertDefaultPickerOptions.customOptionIfOffList(
+                    stored: 30,
+                    standard: AlertDefaultPickerOptions.cooldown,
+                    suffix: "s"
+                )
+                try expect(
+                    onListCooldownCustom == nil &&
+                        AlertDefaultPickerOptions.options(
+                            retainedCustom: nil,
+                            standard: AlertDefaultPickerOptions.cooldown
+                        ) == AlertDefaultPickerOptions.cooldown,
+                    "on-list cooldown created an unexpected custom segment"
+                )
+                let retainedHysteresis = AlertDefaultPickerOption(
+                    label: "2.5%",
+                    value: Decimal(string: "2.5")!
+                )
+                let hysteresisOptions = AlertDefaultPickerOptions.options(
+                    retainedCustom: retainedHysteresis,
+                    standard: AlertDefaultPickerOptions.hysteresis
+                )
+                try expect(
+                    hysteresisOptions.first == retainedHysteresis &&
+                        hysteresisOptions.first(where: { $0.label == "2.5%" })?.value == Decimal(string: "2.5")!,
+                    "retained hysteresis custom segment changed its exact value"
+                )
+                try expect(
+                    hysteresisOptions.filter { option in
+                        !AlertDefaultPickerOptions.hysteresis.contains(option)
+                    }.count == 1,
+                    "hysteresis options contained more than one custom segment"
+                )
+                let onListHysteresisCustom = AlertDefaultPickerOptions.customOptionIfOffList(
+                    stored: 10,
+                    standard: AlertDefaultPickerOptions.hysteresis,
+                    suffix: "%"
+                )
+                try expect(
+                    onListHysteresisCustom == nil &&
+                        AlertDefaultPickerOptions.options(
+                            retainedCustom: nil,
+                            standard: AlertDefaultPickerOptions.hysteresis
+                        ) == AlertDefaultPickerOptions.hysteresis,
+                    "on-list hysteresis created an unexpected custom segment"
+                )
+                let customHysteresis = AlertDefaultPickerOptions.customOptionIfOffList(
+                    stored: Decimal(string: "2.5")!,
+                    standard: AlertDefaultPickerOptions.hysteresis,
+                    suffix: "%"
+                )
+                try expect(
+                    customHysteresis == retainedHysteresis,
+                    "off-list hysteresis custom segment was not formatted at appearance"
                 )
             },
             AcceptanceTest(name: "23 packaging prohibitions and plist facts") {

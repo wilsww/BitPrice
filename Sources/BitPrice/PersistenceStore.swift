@@ -73,6 +73,8 @@ struct V1StateDTO: Codable, Equatable, Sendable {
     let primaryItemID: UUID?
     let alertsEnabled: Bool
     let textSize: String
+    let defaultAlertCooldownSeconds: Int
+    let defaultAlertHysteresisPercent: String
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion
@@ -80,6 +82,8 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         case primaryItemID
         case alertsEnabled
         case textSize
+        case defaultAlertCooldownSeconds
+        case defaultAlertHysteresisPercent
     }
 
     init(
@@ -87,13 +91,17 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         items: [V1ItemDTO],
         primaryItemID: UUID?,
         alertsEnabled: Bool = true,
-        textSize: String = TextSizePreference.medium.rawValue
+        textSize: String = TextSizePreference.medium.rawValue,
+        defaultAlertCooldownSeconds: Int = 30,
+        defaultAlertHysteresisPercent: String = "10"
     ) {
         self.schemaVersion = schemaVersion
         self.items = items
         self.primaryItemID = primaryItemID
         self.alertsEnabled = alertsEnabled
         self.textSize = TextSizePreference(rawValue: textSize)?.rawValue ?? TextSizePreference.medium.rawValue
+        self.defaultAlertCooldownSeconds = defaultAlertCooldownSeconds
+        self.defaultAlertHysteresisPercent = defaultAlertHysteresisPercent
     }
 
     init(from decoder: any Decoder) throws {
@@ -105,6 +113,8 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         let decodedTextSize = try container.decodeIfPresent(String.self, forKey: .textSize)
             ?? TextSizePreference.medium.rawValue
         textSize = TextSizePreference(rawValue: decodedTextSize)?.rawValue ?? TextSizePreference.medium.rawValue
+        defaultAlertCooldownSeconds = try container.decodeIfPresent(Int.self, forKey: .defaultAlertCooldownSeconds) ?? 30
+        defaultAlertHysteresisPercent = try container.decodeIfPresent(String.self, forKey: .defaultAlertHysteresisPercent) ?? "10"
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -118,6 +128,8 @@ struct V1StateDTO: Codable, Equatable, Sendable {
         }
         try container.encode(alertsEnabled, forKey: .alertsEnabled)
         try container.encode(textSize, forKey: .textSize)
+        try container.encode(defaultAlertCooldownSeconds, forKey: .defaultAlertCooldownSeconds)
+        try container.encode(defaultAlertHysteresisPercent, forKey: .defaultAlertHysteresisPercent)
     }
 }
 
@@ -147,7 +159,9 @@ func migrateV0ToV1(_ old: V0StateDTO) -> V1StateDTO {
         },
         primaryItemID: old.primaryItemID,
         alertsEnabled: true,
-        textSize: TextSizePreference.medium.rawValue
+        textSize: TextSizePreference.medium.rawValue,
+        defaultAlertCooldownSeconds: 30,
+        defaultAlertHysteresisPercent: "10"
     )
 }
 
@@ -297,12 +311,17 @@ final class PersistenceStore {
             },
             primaryItemID: state.primaryItemID,
             alertsEnabled: state.alertsEnabled,
-            textSize: state.textSize.rawValue
+            textSize: state.textSize.rawValue,
+            defaultAlertCooldownSeconds: state.defaultAlertCooldownSeconds,
+            defaultAlertHysteresisPercent: decimalString(state.defaultAlertHysteresisPercent)
         )
     }
 
     static func domain(from dto: V1StateDTO) throws -> PersistedState {
-        PersistedState(
+        guard let defaultAlertHysteresisPercent = finiteDecimal(from: dto.defaultAlertHysteresisPercent) else {
+            throw ValidationFailure.invalid("Invalid default alert hysteresis wire value")
+        }
+        return PersistedState(
             schemaVersion: dto.schemaVersion,
             items: try dto.items.map { item in
                 WatchItem(
@@ -332,7 +351,9 @@ final class PersistenceStore {
             },
             primaryItemID: dto.primaryItemID,
             alertsEnabled: dto.alertsEnabled,
-            textSize: TextSizePreference(rawValue: dto.textSize) ?? .medium
+            textSize: TextSizePreference(rawValue: dto.textSize) ?? .medium,
+            defaultAlertCooldownSeconds: dto.defaultAlertCooldownSeconds,
+            defaultAlertHysteresisPercent: defaultAlertHysteresisPercent
         )
     }
 

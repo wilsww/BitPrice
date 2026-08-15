@@ -62,6 +62,8 @@ struct PersistedState: Codable, Equatable, Sendable {
     var primaryItemID: UUID?
     var alertsEnabled: Bool = true
     var textSize: TextSizePreference = .medium
+    var defaultAlertCooldownSeconds: Int = 30
+    var defaultAlertHysteresisPercent: Decimal = 10
 
     static func bitcoinSeed(id: UUID = UUID()) -> PersistedState {
         let binance = VenueMapping(
@@ -92,7 +94,9 @@ struct PersistedState: Codable, Equatable, Sendable {
             items: [item],
             primaryItemID: id,
             alertsEnabled: true,
-            textSize: .medium
+            textSize: .medium,
+            defaultAlertCooldownSeconds: 30,
+            defaultAlertHysteresisPercent: 10
         )
     }
 }
@@ -404,6 +408,14 @@ func validatePersistedState(_ state: PersistedState) throws {
     }
     guard state.items.count <= maximumWatchlistCount else {
         throw ValidationFailure.invalid("The watchlist exceeds \(maximumWatchlistCount) items")
+    }
+    guard (0...604_800).contains(state.defaultAlertCooldownSeconds) else {
+        throw ValidationFailure.invalid("Default alert cooldown is out of range")
+    }
+    guard decimalIsFinite(state.defaultAlertHysteresisPercent),
+          state.defaultAlertHysteresisPercent >= 0,
+          state.defaultAlertHysteresisPercent < 100 else {
+        throw ValidationFailure.invalid("Default alert hysteresis is out of range")
     }
     guard Set(state.items.map(\.id)).count == state.items.count else {
         throw ValidationFailure.invalid("Duplicate item UUID")
