@@ -39,9 +39,9 @@ defects appeared within minutes of the first real desktop launch.
 ### The panel background lets whatever is behind it bleed through
 Raised 2026-08-15. **Resolved in ui24.** The panel now applies `.regularMaterial`
 after its fixed frame, so the surface is defined rather than inherited. Verified
-on the desktop in dark appearance: no colour cast, cards still distinct. Light
-appearance and an appearance change made while the panel is open are still
-unverified.
+on the desktop in both dark and light appearance: no colour cast, cards still
+distinct. Light mode was the real risk, since the contrast between a translucent
+card fill and a lighter backdrop is narrower there; it holds.
 
 ### Quit is too close to where the pointer already is
 Raised 2026-08-15. **Resolved in ui24.** Quit moved to the footer row at the
@@ -90,34 +90,92 @@ candidate artwork to a contact sheet without touching the shipped icon, which is
 how this design was chosen; the next revision should use it rather than editing
 `make-icon.swift` speculatively.
 
-### Add-coin venue selection is probably unnecessary ceremony
-Raised 2026-08-15. Not yet evaluated in depth; recorded before it is forgotten.
+### Quote-asset support is limited to USDT and USD
+Raised 2026-08-15. Not yet evaluated in depth beyond the reading below.
 
-**The observation.** Adding a coin makes the user answer two market pickers
-before the Add button enables. The two venues are always the same two, and their
-roles are already fixed in code: Binance is the live WebSocket source, Coinbase
-is the 60-second polled fallback, and `chartSelection` / `reconcileFallbacks`
-already switch between them automatically when one is unavailable. So the step
-looks like it asks the user to configure something the app has already decided.
+**The current behaviour.** Both candidate fetchers hard-filter to a single quote
+asset: `RESTClients.binanceCandidates` keeps only `quoteAsset == "USDT"` and
+`RESTClients.coinbaseCandidates` keeps only `quoteCurrency == "USD"`. Every other
+pair — `BTC/USDC`, `ETH/BTC`, `BTC/FDUSD` — is discarded before it reaches the
+UI. This is not a case of different quote assets being treated as equivalent;
+the others never enter the system at all.
 
-**What the step actually asks, which is not the same thing.** The user is not
-choosing *which venue*; they are choosing *which market on each venue* —
-`BTCUSDT` versus `BTCFDUSD`, `BTC-USD` versus `BTC-USDC`. Those differ in quote
-asset, and therefore in price. Removing the pickers outright would mean picking
-a market on the user's behalf, which is a different and larger decision than
-removing a redundant venue choice.
+**What should change.** Support other quote assets, so that a mainstream pair
+like `ETH/BTC` can be watched. The current single-quote-asset restriction is a
+simplification, not a decision anyone made deliberately about what users need.
 
-**Questions to settle before implementing anything.**
-- Can a market be chosen automatically with a rule that is right often enough —
-  preferring USD, then USDT, then highest liquidity? What happens for a coin
-  where the rule picks a thin market?
-- `AddCoinView` currently enables Add only "after both venues are answered and at
-  least one has a market". If selection becomes automatic, what does the failure
-  case look like when neither venue lists the coin at all?
-- Should an automatic choice still be *visible* — shown as "Using BTCUSDT" with
-  a way to change it — or entirely hidden? The project's recurring defect shape
-  is an engine that is correct while the UI discloses nothing (the hysteresis
-  and alerts-off defects), and a silently chosen quote asset is that shape.
+**A constraint that must ship with it, not after it.** Nothing today checks that
+an item's two venue mappings share a quote asset. That has been safe only
+because the hard filter pinned them to USDT and USD, whose prices track closely
+enough that swapping between them on fallback is immaterial. Remove the filter
+and that accidental protection disappears: a user could pick Binance `ETHBTC`
+alongside Coinbase `ETH-USD`, and `requestFallbackIfEligible` would faithfully
+substitute one for the other, so the row's number would jump between roughly
+0.024 and roughly 1885 on every fallback. The engine is not at fault — it uses
+the mapping the user chose — so the fix belongs where the pair is chosen:
+either refuse to add mismatched mappings, or force one venue to No market.
+
+**Other things this touches, to settle before implementing.**
+- **Candidate list presentation.** Once the filter is gone, a coin may have
+  several markets per venue. The current one-radio-group-per-venue layout was
+  built for the case where each venue has at most one candidate, and would not
+  hold a list of six.
+- **Alert thresholds are absolute prices.** A threshold set against `ETHBTC`
+  means nothing if the item's effective quote asset later changes. Related to
+  the mismatch constraint above, but also worth checking for an item whose
+  mapping is edited after an alert exists.
+- **`AppModel.formatPrice` digit handling.** It has only ever been exercised on
+  dollar-scale numbers. A price like 0.024 needs checking, not assuming.
+
+Related code: `RESTClients.binanceCandidates`, `RESTClients.coinbaseCandidates`,
+`AppModel.loadCandidates`, `AppModel.requestFallbackIfEligible`, `VenueMapping`,
+`AddCoinView.candidatePicker`, `AddCoinView.canAdd`.
+
+### Show the source, not just the quote asset, when a row is on fallback
+Raised 2026-08-15. Not yet evaluated. Small; independent of everything else here.
+
+A row prints its symbol and quote asset (`WatchRow`, via
+`model.quoteAsset(for:)`), and `presentation` covers live/stale/offline, but the
+venue is never named. When Binance drops and Coinbase takes over, the row's
+trailing label changes from `USDT` to `USD` and nothing else does — reading that
+as "the source changed" requires already knowing which venue uses which quote
+asset.
+
+Proposal: append the venue to that label while a row is being served by the
+fallback, so it reads `USD · Coinbase`, and leave the primary source unlabelled.
+Labelling only the exception is the point: a `Binance` tag on every row in a
+seven-row list is noise, and a marker everyone learns to ignore is not a marker.
+`Quote.source` already carries what is needed, so this is presentation only —
+no engine, persistence, or networking change. The chart's disclosure line
+already names its source this way, so this also makes the two agree.
+
+### Add-coin venue selection asks for two answers that have only one option each
+Raised 2026-08-15. Re-read 2026-08-15; **the original entry's premise was wrong
+and is corrected here.**
+
+**The correction.** This item previously recorded that the user is not choosing a
+venue but choosing *which market* on each venue — `BTCUSDT` versus `BTCFDUSD`,
+`BTC-USD` versus `BTC-USDC` — and that removing the pickers would therefore mean
+picking a market on the user's behalf. That is not what the code does. Both
+fetchers hard-filter to one quote asset per venue, and a venue cannot list two
+products with the same base and quote, so each candidate list holds at most one
+entry in practice. The "larger decision" described there does not exist.
+
+**What is actually asked.** `canAdd` requires both `selectedBinance` and
+`selectedCoinbase` to be non-nil, and both start nil. So adding a coin means
+answering two radio groups that each offer one real market plus "No market",
+then pressing Add. Two of those clicks acknowledge rather than choose.
+
+**What must survive any change.** "No market" is not filler. It lets a user
+exclude a venue that *does* list the ticker — the case the orange warning
+describes, where a ticker match is a string guess and a wrong one shows a
+plausible-looking wrong price. Any redesign has to keep that reachable.
+
+**A sequencing dependency, which is why this is not the next thing to do.** If
+quote-asset support is widened (see above), each venue will genuinely offer
+several markets and the pickers stop being ceremony — they become the real
+choice. Simplifying them first and rebuilding them afterwards is doing the work
+twice. Settle the quote-asset question first, then re-evaluate this.
 
 Related code: `AppModel.loadCandidates`, `AddCoinView` (`binanceCandidates`,
 `coinbaseCandidates`, `selectedBinance`, `selectedCoinbase`, `canAdd`),

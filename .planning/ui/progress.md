@@ -529,7 +529,7 @@
 - Strict tests: 38 passed, 0 failed, 2 expected no-Aqua skips. Strict app build and bundle checks passed.
 - Desktop verification passed at Extra Large: no colour cast from a window behind the panel, cards still distinct against the material, Quit visible and reachable in the footer, the disclosure text wrapping rather than truncating, and the reordered cards otherwise unchanged.
 - Two follow-up edits were made after that review and re-verified with a strict build and the full test run: Quit restored to `.borderedProminent`/`.tint(.red)` with the label shortened to "Quit", and the `SettingsView.body` block re-indented to match its enclosing `GeometryReader`/`ScrollView` (whitespace only — the implementation had left the original nesting depth in place when it added the two wrappers).
-- Still unverified on the desktop: light appearance (the review was in dark), and an appearance change made while the panel is open.
+- Light appearance verified on the desktop 2026-08-15: no colour cast, and the cards stay distinct against the lighter material — the narrower light-mode contrast between a translucent card fill and its backdrop was the specific risk and it did not materialise. Both appearances now confirmed, so `.regularMaterial` stands and the `.thickMaterial` fallback is not needed.
 
 ## UI25 session: 2026-08-15
 
