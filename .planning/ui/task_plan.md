@@ -117,6 +117,45 @@ The sequencing dependency recorded here held: widening quote assets first turned
 that list into a real choice, so the ceremony resolved itself rather than needing
 its own simplification.
 
+### Look for other price sources
+Raised 2026-08-16. Not yet evaluated.
+
+Binance and Coinbase are the only venues. Worth surveying what else could serve
+as a source — CoinMarketCap, OKX, AICoin, and whatever else the survey turns up.
+
+**What a candidate has to provide**, given the shape the app settled into across
+ui26–ui28. Any survey should answer these per venue rather than comparing on
+name recognition:
+
+- **A live push feed, or a poll that is fast enough.** Binance is a WebSocket
+  and Coinbase is a 60-second poll, and that difference is already disclosed in
+  the UI because a poll can miss a brief alert breach. A venue offering only a
+  slow poll is a worse Coinbase, not a second Binance.
+- **A product catalogue that can be filtered by base asset.** Adding a coin
+  matches candidates by ticker string against a catalogue endpoint. A venue with
+  no such listing cannot participate in the add flow as it stands.
+- **Historical candles at the three chart granularities** — 15m, 6h, 1d — since
+  `ChartRange` derives its request from them. Coinbase already constrains this:
+  it accepts only 60/300/900/3600/21600/86400 seconds, which is why 30m was
+  rejected for the 24h range. A venue with a coarser or differently-shaped set
+  would constrain the range table further.
+- **Terms that permit this use.** CoinMarketCap in particular is an API-key
+  product with tiered limits, which is a different arrangement from the two
+  keyless public APIs used today. That affects distribution, not just code.
+
+**What the current design does not need**, and should not acquire by accident:
+a venue does not have to be a fallback for another. Since ui26 an item has one
+market and no venue substitutes for another at runtime — see the quote-asset
+entry above for why that substitution was removed. Adding a third venue means
+adding a third thing a user can choose, not a third link in a chain.
+
+**Cost to weigh.** Each venue adds a candidate fetcher, a quote path, a candle
+path, rate-limit pacing, and its own failure modes, and every one of those has
+to be exercised on a desktop against the live API. Two venues is already the
+larger part of `RESTClients`. A third should be justified by coins or markets
+the current two genuinely cannot reach, which is the first thing the survey
+should measure.
+
 ### Chart time range
 The chart is fixed to 24 hours. Evaluated 2026-08-15; decisions below.
 Implemented in ui22 — the selector, `ChartRange`, persistence, and range-aware
