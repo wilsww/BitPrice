@@ -341,11 +341,11 @@ actor RESTClients {
         }
         try requireSuccess(response, domain: "binance")
         let catalog: BinanceExchangeInfo = try decode(response.body, domain: "binance")
-        return catalog.symbols.compactMap { product in
+        return VenueCandidateOrdering.sorted(catalog.symbols.compactMap { product in
             guard product.baseAsset.caseInsensitiveCompare(symbol) == .orderedSame,
-                  product.quoteAsset == "USDT", product.status == "TRADING" else { return nil }
+                  product.status == "TRADING" else { return nil }
             return VenueCandidate(venue: .binance, productID: product.symbol, baseAsset: product.baseAsset, quoteAsset: product.quoteAsset)
-        }
+        })
     }
 
     func coinbaseCandidates(symbol: String) async throws -> [VenueCandidate] {
@@ -356,12 +356,12 @@ actor RESTClients {
         }
         try requireSuccess(response, domain: "coinbase")
         let catalog: [CoinbaseProduct] = try decode(response.body, domain: "coinbase")
-        return catalog.compactMap { product in
+        return VenueCandidateOrdering.sorted(catalog.compactMap { product in
             guard product.baseCurrency.caseInsensitiveCompare(symbol) == .orderedSame,
-                  product.quoteCurrency == "USD", product.status == "online",
+                  product.status == "online",
                   product.tradingDisabled != true, product.cancelOnly != true else { return nil }
             return VenueCandidate(venue: .coinbase, productID: product.id, baseAsset: product.baseCurrency, quoteAsset: product.quoteCurrency)
-        }
+        })
     }
 
     func coinbaseStats(productID: String) async throws -> CoinbaseQuoteValue {

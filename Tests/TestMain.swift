@@ -65,6 +65,22 @@ actor StubHTTPTransport: HTTPTransport {
     func capturedRequests() -> [URLRequest] { requests }
 }
 
+actor RoutingHTTPTransport: HTTPTransport {
+    private let responses: [String: HTTPResponseData]
+    private let fallback: HTTPResponseData
+
+    init(responses: [String: HTTPResponseData], fallback: HTTPResponseData) {
+        self.responses = responses
+        self.fallback = fallback
+    }
+
+    func response(for request: URLRequest) async throws -> HTTPResponseData {
+        let path = request.url?.path ?? ""
+        for (suffix, response) in responses where path.hasSuffix(suffix) { return response }
+        return fallback
+    }
+}
+
 actor HangingHTTPTransport: HTTPTransport {
     func response(for request: URLRequest) async throws -> HTTPResponseData {
         try await ContinuousClock().sleep(for: .seconds(3_600))
@@ -88,6 +104,29 @@ actor DelayedHTTPTransport: HTTPTransport {
     func completeFirst(_ response: HTTPResponseData) {
         guard !pending.isEmpty else { return }
         pending.removeFirst().resume(returning: response)
+    }
+}
+
+actor DelayedPathHTTPTransport: HTTPTransport {
+    private struct Pending {
+        let path: String
+        let continuation: CheckedContinuation<HTTPResponseData, any Error>
+    }
+
+    private var pending: [Pending] = []
+
+    func response(for request: URLRequest) async throws -> HTTPResponseData {
+        let path = request.url?.path ?? ""
+        return try await withCheckedThrowingContinuation { continuation in
+            pending.append(Pending(path: path, continuation: continuation))
+        }
+    }
+
+    func pendingPaths() -> [String] { pending.map(\.path) }
+
+    func completeFirst(pathSuffix: String, response: HTTPResponseData) {
+        guard let index = pending.firstIndex(where: { $0.path.hasSuffix(pathSuffix) }) else { return }
+        pending.remove(at: index).continuation.resume(returning: response)
     }
 }
 
@@ -267,6 +306,41 @@ struct BitPriceTests {
                 do { try validatePersistedState(noMapping); throw TestFailure(description: "mappingless accepted") }
                 catch is ValidationFailure {}
             },
+            AcceptanceTest(name: "05b same coin may use different markets") {
+                let firstID = UUID()
+                let secondID = UUID()
+                let firstMapping = VenueMapping(
+                    exchange: .binance, productID: "ETHUSDT", baseAsset: "ETH", quoteAsset: "USDT",
+                    provenance: .userConfirmedTickerMatch
+                )
+                let secondMapping = VenueMapping(
+                    exchange: .binance, productID: "ETHBTC", baseAsset: "ETH", quoteAsset: "BTC",
+                    provenance: .userConfirmedTickerMatch
+                )
+                let first = WatchItem(
+                    id: firstID, coinGeckoID: "ethereum", symbol: "ETH", name: "Ethereum",
+                    binanceMapping: firstMapping, coinbaseMapping: nil, alert: nil
+                )
+                let second = WatchItem(
+                    id: secondID, coinGeckoID: "ethereum", symbol: "ETH", name: "Ethereum",
+                    binanceMapping: secondMapping, coinbaseMapping: nil, alert: nil
+                )
+                var state = PersistedState(schemaVersion: 1, items: [first, second], primaryItemID: firstID)
+                try validatePersistedState(state)
+
+                state.items[1].binanceMapping = firstMapping
+                do {
+                    try validatePersistedState(state)
+                    throw TestFailure(description: "same CoinGecko ID and market were accepted")
+                } catch is ValidationFailure {}
+            },
+            AcceptanceTest(name: "05c validation failure keeps its message") {
+                let failure = ValidationFailure.invalid("Duplicate Binance product ID")
+                try expect(
+                    failure.localizedDescription == "Duplicate Binance product ID",
+                    "ValidationFailure lost its user-facing message"
+                )
+            },
             AcceptanceTest(name: "06 exact v0 migration and v1 fixture") {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
@@ -415,19 +489,48 @@ struct BitPriceTests {
                 try expect(state.chartRange == .hours24, "unrecognized chart range did not default to 24h")
                 try expect(!store.recoveryProtected, "unrecognized chart range protected a valid v1 file")
             },
+            AcceptanceTest(name: "06g persisted dual mappings remain loadable") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                let original = PersistedState.bitcoinSeed()
+                try store.save(original)
+                guard case .loaded(let reloaded) = store.load(),
+                      let originalItem = original.items.first,
+                      let reloadedItem = reloaded.items.first else {
+                    throw TestFailure(description: "persisted dual-mapping item did not load")
+                }
+                try expect(
+                    reloadedItem.binanceMapping == originalItem.binanceMapping &&
+                        reloadedItem.coinbaseMapping == originalItem.coinbaseMapping,
+                    "loading a legacy item dropped one of its mappings"
+                )
+                try expect(!store.recoveryProtected, "persisted dual-mapping item entered recovery")
+            },
             AcceptanceTest(name: "07 future unregistered-older dispatch path") {
                 try expect(schemaDispatch(version: 1, current: 2, registeredVersions: [0, 2]) == .unregisteredOlder,
                            "unregistered older path missing")
                 try expect(schemaDispatch(version: 3, current: 2, registeredVersions: [0, 2]) == .newer,
                            "newer path missing")
             },
-            AcceptanceTest(name: "08 encoded search and exact candidate filters") {
+            AcceptanceTest(name: "08 encoded search and candidate ordering") {
                 let searchBody = Data(#"{"coins":[]}"#.utf8)
                 let transport = StubHTTPTransport([response(body: searchBody)])
                 let clients = clients(transport: transport)
                 _ = try await clients.searchCoinGecko(query: "btc & usd")
                 let request = try expectOne(await transport.capturedRequests())
                 try expect(request.url?.absoluteString.contains("btc%20%26%20usd") == true, "query not encoded")
+                let candidates = [
+                    VenueCandidate(venue: .binance, productID: "ETHBTC", baseAsset: "ETH", quoteAsset: "BTC"),
+                    VenueCandidate(venue: .binance, productID: "ETHUSDC", baseAsset: "ETH", quoteAsset: "USDC"),
+                    VenueCandidate(venue: .coinbase, productID: "ETH-USD", baseAsset: "ETH", quoteAsset: "USD"),
+                    VenueCandidate(venue: .binance, productID: "ETHUSDT", baseAsset: "ETH", quoteAsset: "USDT")
+                ]
+                let ordered = VenueCandidateOrdering.sorted(candidates)
+                try expect(
+                    ordered.map(\.productID) == ["ETH-USD", "ETHUSDT", "ETHUSDC", "ETHBTC"],
+                    "venue candidates were not ordered by preferred quote asset"
+                )
             },
             AcceptanceTest(name: "08c CoinGecko HTML entity decoding") {
                 let searchBody = Data(#"{"coins":[{"id":"sand","name":"S&amp;L &lt;token&gt; &quot;quoted&quot; &#39;single&#39; &apos;apostrophe&apos; &#38; &#x26; & bare","symbol":"s&AMP;l","market_cap_rank":null,"thumb":null}]}"#.utf8)
@@ -528,35 +631,103 @@ struct BitPriceTests {
                 try expect(sink.ticks.count == 1 && sink.ticks[0].productID == "BTCUSDT", "valid ticker rejected")
                 parts.controller.shutdown()
             },
-            AcceptanceTest(name: "15 Coinbase optional open contract") {
+            AcceptanceTest(name: "15 Coinbase quote change is unavailable without a positive open") {
                 let bodies = [
-                    #"{"last":"100"}"#,
-                    #"{"last":"100","open":null}"#,
-                    #"{"last":"100","open":{"bad":1}}"#,
-                    #"{"last":"100","open":"0"}"#,
-                    #"{"last":"100","open":"-1"}"#,
-                    #"{"last":"110","open":"100"}"#
-                ].map { response(body: Data($0.utf8)) }
-                let clients = clients(transport: StubHTTPTransport(bodies))
+                    Data(#"{"last":"100","open":"0"}"#.utf8),
+                    Data(#"{"last":"100","open":"-1"}"#.utf8),
+                    Data(#"{"last":"100"}"#.utf8),
+                    Data(#"{"last":"100","open":null}"#.utf8),
+                    Data(#"{"last":"100","open":{"unexpected":true}}"#.utf8),
+                    Data(#"{"last":"110","open":"100"}"#.utf8)
+                ]
+                let client = clients(transport: StubHTTPTransport(bodies.map { response(body: $0) }))
                 for _ in 0..<5 {
-                    let value = try await clients.coinbaseStats(productID: "BTC-USD")
-                    try expect(value.change == .unavailable, "invalid open fabricated change")
+                    let value = try await client.coinbaseStats(productID: "ETH-USD")
+                    try expect(value.change == .unavailable, "invalid Coinbase open fabricated a percentage")
                 }
-                let valid = try await clients.coinbaseStats(productID: "BTC-USD")
-                try expect(valid.change == .percent(10), "valid open percent wrong")
-            },
-            AcceptanceTest(name: "16 total deadline cancels hanging transport") {
-                let clients = RESTClients(
-                    transport: HangingHTTPTransport(), continuousClock: ImmediateContinuousClock(),
-                    wallClock: FixedWallClock(value: Date()), coinbasePacer: NoopPacer(),
-                    binancePacer: NoopPacer(), coinGeckoPacer: NoopPacer()
-                )
+                let valid = try await client.coinbaseStats(productID: "ETH-USD")
+                try expect(valid.price == 110 && valid.change == .percent(10), "Coinbase percentage calculation changed")
+
+                let invalidLast = clients(transport: StubHTTPTransport([
+                    response(body: Data(#"{"last":"0","open":"100"}"#.utf8))
+                ]))
                 do {
-                    _ = try await clients.coinbaseStats(productID: "BTC-USD")
-                    throw TestFailure(description: "hanging transport escaped deadline")
-                } catch let failure as NetworkFailure {
-                    try expect(failure.domain == "deadline", "wrong deadline failure")
+                    _ = try await invalidLast.coinbaseStats(productID: "ETH-USD")
+                    throw TestFailure(description: "nonpositive Coinbase last price was accepted")
+                } catch is NetworkFailure {}
+            },
+            AcceptanceTest(name: "16 Coinbase primary quote makes a row live") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                try store.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil))
+                let lock = try ProcessLock(rootDirectory: root)
+                let transport = RoutingHTTPTransport(
+                    responses: ["/stats": response(body: Data(#"{"last":"100","open":"90"}"#.utf8))],
+                    fallback: response(body: Data("[]".utf8))
+                )
+                let parts = controllerParts()
+                let model = AppModel(
+                    persistenceStore: store, processLock: lock, restClients: clients(transport: transport),
+                    feedController: parts.controller, notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
+                    continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false, observeSleepWake: false
+                )
+                let id = UUID()
+                let mapping = VenueMapping(exchange: .coinbase, productID: "ETH-USD", baseAsset: "ETH",
+                                           quoteAsset: "USD", provenance: .userConfirmedTickerMatch)
+                try model.addItem(WatchItem(id: id, coinGeckoID: "ethereum", symbol: "ETH", name: "Ethereum",
+                                            binanceMapping: nil, coinbaseMapping: mapping, alert: nil))
+                for _ in 0..<1_000 {
+                    if model.quotes[id] != nil { break }
+                    try await Task.sleep(for: .milliseconds(1))
                 }
+                try expect(model.quotes[id]?.source == .coinbase, "Coinbase quote was not applied")
+                try expect(model.rowPresentation(for: model.items[0]) == .live, "fresh Coinbase quote was not live")
+                model.shutdown()
+            },
+            AcceptanceTest(name: "16b Coinbase response after remap is rejected") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                try store.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil))
+                let lock = try ProcessLock(rootDirectory: root)
+                let transport = DelayedPathHTTPTransport()
+                let parts = controllerParts()
+                let model = AppModel(
+                    persistenceStore: store, processLock: lock, restClients: clients(transport: transport),
+                    feedController: parts.controller, notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
+                    continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false, observeSleepWake: false
+                )
+                let id = UUID()
+                let original = VenueMapping(exchange: .coinbase, productID: "OLD-USD", baseAsset: "OLD",
+                                             quoteAsset: "USD", provenance: .userConfirmedTickerMatch)
+                try model.addItem(WatchItem(id: id, coinGeckoID: "old", symbol: "OLD", name: "Old",
+                                            binanceMapping: nil, coinbaseMapping: original, alert: nil))
+                for _ in 0..<100 {
+                    if (await transport.pendingPaths()).contains(where: { $0.hasSuffix("/stats") }) { break }
+                    await Task.yield()
+                }
+                let pendingPaths = await transport.pendingPaths()
+                try expect(
+                    pendingPaths.contains(where: { $0.hasSuffix("/stats") }),
+                    "Coinbase quote request was not held"
+                )
+                try model.commitEdit { draft in
+                    draft.items[0].coinbaseMapping = VenueMapping(
+                        exchange: .coinbase, productID: "NEW-USD", baseAsset: "NEW", quoteAsset: "USD",
+                        provenance: .userConfirmedTickerMatch
+                    )
+                }
+                await transport.completeFirst(
+                    pathSuffix: "/stats", response: response(body: Data(#"{"last":"100","open":"90"}"#.utf8))
+                )
+                await Task.yield(); await Task.yield()
+                try expect(model.quotes[id] == nil, "superseded Coinbase quote published after remap")
+                model.shutdown()
             },
             AcceptanceTest(name: "17 truthful candle normalization and HTTP status") {
                 let start = Date(timeIntervalSince1970: 10_000)
@@ -807,6 +978,7 @@ struct BitPriceTests {
             },
             AcceptanceTest(name: "22 presentation formatting") {
                 try expect(AppModel.formatPrice(Decimal(string: "1234.5")!) == "1,234.50", "price formatting")
+                try expect(AppModel.formatPrice(Decimal(string: "0.024")!) == "0.024", "non-dollar price formatting")
                 try expect(AppModel.formatChange(.unavailable) == "—", "unavailable change fabricated")
                 try expect(AppModel.formatChange(.percent(1)).hasPrefix("+"), "positive direction missing")
                 // Regression: whole-number rounding rendered +1.34% as "+1%" and

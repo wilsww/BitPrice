@@ -277,14 +277,6 @@ enum ConnectionPresentation: String, Sendable {
     case offline
 }
 
-struct FallbackRequestToken: Equatable, Sendable {
-    let requestID: UUID
-    let itemID: UUID
-    let productID: String
-    let marketRevision: UInt64
-    let startedAt: MonotonicInstant
-}
-
 struct ChartRequestToken: Equatable, Sendable {
     let requestID: UUID
     let itemID: UUID
@@ -310,6 +302,32 @@ struct VenueCandidate: Equatable, Identifiable, Sendable {
     let productID: String
     let baseAsset: String
     let quoteAsset: String
+}
+
+enum VenueCandidateOrdering {
+    static func sorted(_ candidates: [VenueCandidate]) -> [VenueCandidate] {
+        candidates.sorted { lhs, rhs in
+            let lhsRank = quotePriority(lhs.quoteAsset)
+            let rhsRank = quotePriority(rhs.quoteAsset)
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            let quoteOrder = lhs.quoteAsset.caseInsensitiveCompare(rhs.quoteAsset)
+            if quoteOrder != .orderedSame { return quoteOrder == .orderedAscending }
+            let venueOrder = lhs.venue.rawValue.caseInsensitiveCompare(rhs.venue.rawValue)
+            if venueOrder != .orderedSame { return venueOrder == .orderedAscending }
+            let productOrder = lhs.productID.caseInsensitiveCompare(rhs.productID)
+            if productOrder != .orderedSame { return productOrder == .orderedAscending }
+            return lhs.productID < rhs.productID
+        }
+    }
+
+    private static func quotePriority(_ quoteAsset: String) -> Int {
+        switch quoteAsset.uppercased() {
+        case "USD", "USDT": 0
+        case "USDC": 1
+        case "FDUSD": 2
+        default: 3
+        }
+    }
 }
 
 struct CoinbaseQuoteValue: Equatable, Sendable {
@@ -402,7 +420,7 @@ enum PersistenceLoadResult: Sendable {
     case recovery(seed: PersistedState, reason: String, originalBytes: Data)
 }
 
-enum ValidationFailure: Error, Equatable, Sendable, CustomStringConvertible {
+enum ValidationFailure: Error, Equatable, Sendable, CustomStringConvertible, LocalizedError {
     case invalid(String)
 
     var description: String {
@@ -410,6 +428,8 @@ enum ValidationFailure: Error, Equatable, Sendable, CustomStringConvertible {
         case .invalid(let message): message
         }
     }
+
+    var errorDescription: String? { description }
 }
 
 func decimalIsFinite(_ value: Decimal) -> Bool {
@@ -461,9 +481,6 @@ func validatePersistedState(_ state: PersistedState) throws {
     }
     guard Set(state.items.map(\.id)).count == state.items.count else {
         throw ValidationFailure.invalid("Duplicate item UUID")
-    }
-    guard Set(state.items.map(\.coinGeckoID)).count == state.items.count else {
-        throw ValidationFailure.invalid("Duplicate CoinGecko ID")
     }
     let binanceIDs = state.items.compactMap(\.binanceMapping?.productID)
     let coinbaseIDs = state.items.compactMap(\.coinbaseMapping?.productID)

@@ -91,95 +91,31 @@ how this design was chosen; the next revision should use it rather than editing
 `make-icon.swift` speculatively.
 
 ### Quote-asset support is limited to USDT and USD
-Raised 2026-08-15. Not yet evaluated in depth beyond the reading below.
+Raised 2026-08-15. **Resolved across ui26–ui28.**
 
-**The current behaviour.** Both candidate fetchers hard-filter to a single quote
-asset: `RESTClients.binanceCandidates` keeps only `quoteAsset == "USDT"` and
-`RESTClients.coinbaseCandidates` keeps only `quoteCurrency == "USD"`. Every other
-pair — `BTC/USDC`, `ETH/BTC`, `BTC/FDUSD` — is discarded before it reaches the
-UI. This is not a case of different quote assets being treated as equivalent;
-the others never enter the system at all.
+The hard filters (`quoteAsset == "USDT"`, `quoteCurrency == "USD"`) are gone, so
+any legal pair including `ETH/BTC` can be watched. The compatibility constraint
+this entry warned about never had to be built: it existed only to stop runtime
+fallback substituting one venue's price for another's, and ui26 removed that
+substitution entirely. An item has one market, so there is nothing to keep
+compatible.
 
-**What should change.** Support other quote assets, so that a mainstream pair
-like `ETH/BTC` can be watched. The current single-quote-asset restriction is a
-simplification, not a decision anyone made deliberately about what users need.
-
-**A constraint that must ship with it, not after it.** Nothing today checks that
-an item's two venue mappings share a quote asset. That has been safe only
-because the hard filter pinned them to USDT and USD, whose prices track closely
-enough that swapping between them on fallback is immaterial. Remove the filter
-and that accidental protection disappears: a user could pick Binance `ETHBTC`
-alongside Coinbase `ETH-USD`, and `requestFallbackIfEligible` would faithfully
-substitute one for the other, so the row's number would jump between roughly
-0.024 and roughly 1885 on every fallback. The engine is not at fault — it uses
-the mapping the user chose — so the fix belongs where the pair is chosen:
-either refuse to add mismatched mappings, or force one venue to No market.
-
-**Other things this touches, to settle before implementing.**
-- **Candidate list presentation.** Once the filter is gone, a coin may have
-  several markets per venue. The current one-radio-group-per-venue layout was
-  built for the case where each venue has at most one candidate, and would not
-  hold a list of six.
-- **Alert thresholds are absolute prices.** A threshold set against `ETHBTC`
-  means nothing if the item's effective quote asset later changes. Related to
-  the mismatch constraint above, but also worth checking for an item whose
-  mapping is edited after an alert exists.
-- **`AppModel.formatPrice` digit handling.** It has only ever been exercised on
-  dollar-scale numbers. A price like 0.024 needs checking, not assuming.
-
-Related code: `RESTClients.binanceCandidates`, `RESTClients.coinbaseCandidates`,
-`AppModel.loadCandidates`, `AppModel.requestFallbackIfEligible`, `VenueMapping`,
-`AddCoinView.candidatePicker`, `AddCoinView.canAdd`.
+A coin may also be watched in several markets at once — the CoinGecko-ID
+uniqueness rule was removed in ui28, leaving per-venue market uniqueness to
+reject an exact duplicate.
 
 ### Show the source, not just the quote asset, when a row is on fallback
-Raised 2026-08-15. Not yet evaluated. Small; independent of everything else here.
-
-A row prints its symbol and quote asset (`WatchRow`, via
-`model.quoteAsset(for:)`), and `presentation` covers live/stale/offline, but the
-venue is never named. When Binance drops and Coinbase takes over, the row's
-trailing label changes from `USDT` to `USD` and nothing else does — reading that
-as "the source changed" requires already knowing which venue uses which quote
-asset.
-
-Proposal: append the venue to that label while a row is being served by the
-fallback, so it reads `USD · Coinbase`, and leave the primary source unlabelled.
-Labelling only the exception is the point: a `Binance` tag on every row in a
-seven-row list is noise, and a marker everyone learns to ignore is not a marker.
-`Quote.source` already carries what is needed, so this is presentation only —
-no engine, persistence, or networking change. The chart's disclosure line
-already names its source this way, so this also makes the two agree.
+Raised 2026-08-15. **Obsolete — there is no fallback.** ui26 removed runtime
+venue substitution, so a row's source never changes and the quote asset it
+already prints is stable. Recorded rather than deleted so a later reader does not
+re-derive the idea without knowing it was overtaken.
 
 ### Add-coin venue selection asks for two answers that have only one option each
-Raised 2026-08-15. Re-read 2026-08-15; **the original entry's premise was wrong
-and is corrected here.**
-
-**The correction.** This item previously recorded that the user is not choosing a
-venue but choosing *which market* on each venue — `BTCUSDT` versus `BTCFDUSD`,
-`BTC-USD` versus `BTC-USDC` — and that removing the pickers would therefore mean
-picking a market on the user's behalf. That is not what the code does. Both
-fetchers hard-filter to one quote asset per venue, and a venue cannot list two
-products with the same base and quote, so each candidate list holds at most one
-entry in practice. The "larger decision" described there does not exist.
-
-**What is actually asked.** `canAdd` requires both `selectedBinance` and
-`selectedCoinbase` to be non-nil, and both start nil. So adding a coin means
-answering two radio groups that each offer one real market plus "No market",
-then pressing Add. Two of those clicks acknowledge rather than choose.
-
-**What must survive any change.** "No market" is not filler. It lets a user
-exclude a venue that *does* list the ticker — the case the orange warning
-describes, where a ticker match is a string guess and a wrong one shows a
-plausible-looking wrong price. Any redesign has to keep that reachable.
-
-**A sequencing dependency, which is why this is not the next thing to do.** If
-quote-asset support is widened (see above), each venue will genuinely offer
-several markets and the pickers stop being ceremony — they become the real
-choice. Simplifying them first and rebuilding them afterwards is doing the work
-twice. Settle the quote-asset question first, then re-evaluate this.
-
-Related code: `AppModel.loadCandidates`, `AddCoinView` (`binanceCandidates`,
-`coinbaseCandidates`, `selectedBinance`, `selectedCoinbase`, `canAdd`),
-`VenueCandidate`, `VenueMapping.provenance`.
+Raised 2026-08-15, premise corrected the same day. **Resolved in ui26 and
+ui28.** The two single-option radio groups became one combined market list.
+The sequencing dependency recorded here held: widening quote assets first turned
+that list into a real choice, so the ceremony resolved itself rather than needing
+its own simplification.
 
 ### Chart time range
 The chart is fixed to 24 hours. Evaluated 2026-08-15; decisions below.
@@ -618,4 +554,32 @@ Complete
 - [x] Reorder the unchanged Settings cards by effect reach: Launch at login, Price alerts, Alert defaults, Text size.
 - [x] Preserve bottom placement when content fits and add a bounded scroll fallback for dynamic Extra Large overflow.
 - [x] Run strict tests/build checks and append the material, ordering, accepted cost, and no-Aqua notes.
+- **Status:** complete
+
+## UI26: one selected venue and visible dead feeds
+- [x] Remove Coinbase runtime fallback state, polling, stats decoding, and acceptance guards while preserving market revisions and Binance feed lifecycle behavior.
+- [x] Allow any legal quote asset, deterministically order venue candidates, and verify low-price formatting.
+- [x] Replace the two venue-selection groups with one combined inline market list and create exactly one mapping for new items.
+- [x] Keep legacy mappings lossless on disk while using Binance when an old item has both mappings; dim offline rows and disclose that alerts cannot fire.
+- [x] Update focused tests, record the SPEC divergence and accepted coverage/feed tradeoffs, run strict build/tests/audits, and write the implementation summary.
+- **Status:** complete
+
+## UI27: Coinbase primary quote polling
+- [x] Read the post-UI26 single-source runtime, REST, domain, view, feed, alert, persistence, test, and build context before editing.
+- [x] Restore Coinbase stats and 60-second primary polling without restoring fallback eligibility, substitution, or fallback tokens; preserve revision/product guards and legacy dual-mapping compatibility.
+- [x] Make row presentation source-aware and restore Coinbase-only polling disclosure in the add flow while keeping UI26's dead-feed visuals and selected-source copy.
+- [x] Add unavailable-change, Coinbase-live, and stale-after-remap tests; run strict tests, build, bundle checks, and forbidden-token audits.
+- [x] Record the UI26 broken combination, the 120-second freshness decision, the polling alert-breach tradeoff, and no-Aqua/no-network desktop limits.
+- **Status:** complete
+
+## UI28: multi-market watch identity and concise add flow
+- [x] Read the current post-UI27 domain, model, views, tests, persistence, feed, alert, build, and planning context.
+- [x] Replace CoinGecko-ID-only uniqueness with the existing per-venue market uniqueness behavior; preserve multi-market streams, exact feed matching, row quote display, menu-bar title, schema 1, and legacy dual mappings.
+- [x] Surface ValidationFailure messages through `localizedDescription` without changing other error types, and add validation/error tests.
+- [x] Keep only the candidate list scrollable, pin Back/Add/disclosures/warning, remove redundant copy and Coin heading, add the no-market outcome, and append the CoinGecko ID to the selectable chart disclosure.
+- [x] Run strict tests/build/bundle audits and record desktop-only verification needs.
+- **Status:** complete
+
+## UI28 follow-up: larger segmented-control hit targets
+- [x] Apply `.controlSize(.large)` to all five segmented pickers (alert cooldown, alert hysteresis, text size, chart range, alert direction).
 - **Status:** complete

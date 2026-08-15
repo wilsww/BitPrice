@@ -544,3 +544,66 @@
 - The legacy `is32`/`il32` compressed-RGB representations were extracted from the built container and inspected at 16 and 32 pixels: the gradient survives run-length encoding and the mark stays legible.
 - `bash scripts/build-app.sh` passed strict compilation, plist lint, signing, linkage, and the bundled-icon check. `bash scripts/run-tests.sh`: 38 passed, 0 failed, 2 expected no-Aqua skips.
 - Desktop-only check outstanding: how the icon reads in the Dock and Finder beside other applications, at the system's own rendering rather than an extracted PNG.
+
+## UI26 session: 2026-08-15
+
+### Phase 57: Trace one-venue runtime and add-flow seams
+- **Status:** in_progress
+- Confirmed fallback state, Coinbase stats, periodic polling, and source-switch chart logic live in AppModel; venue quote-asset filters and candidate decoding live in RESTClients; the existing WatchItem persistence shape can retain both legacy mappings.
+- Chosen compatibility behavior: preserve both mappings when already saved, but use Binance whenever present and never poll or substitute Coinbase at runtime. New items will contain exactly one user-confirmed mapping.
+
+### Phase 58: Implement one-venue runtime and combined market selection
+- **Status:** complete
+- Removed the Coinbase fallback state/tasks/tokens/loop/stats path, simplified quote/chart source selection, and kept marketRevision guards and Binance feed lifecycle unchanged.
+- Removed quote-asset filters, added deterministic stable-quote-first ordering, changed Add coin to one combined inline radio list, and made new WatchItems set exactly one mapping.
+- Offline/stale rows now dim their data, suppress change direction colour, preserve the last price, and show Alert · Off while the selected feed is not live.
+
+### Phase 59: Verify and record UI26
+- **Status:** complete
+- `bash scripts/run-tests.sh`: 37 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh` passed strict compilation, plist lint, signing verification, linkage, and bundled-icon checks.
+- Removed fallback-only tests 15 and 16; added candidate-ordering, non-dollar formatting, and dual-mapping persistence coverage. The current source diff is -100 lines in AppModel, -31 lines in RESTClients after moving the ordering helper to DomainModels, -11 lines in Views, and +12 lines in DomainModels for the helper/type cleanup; tests are net-neutral.
+- No Aqua GUI session or live venue access was available. Desktop review remains necessary for many-market Extra Large candidate readability, offline row/alert disclosure, and ETH/BTC price/chart behavior.
+- A cleanup attempt also removed the shared positive-decimal parser; the strict compiler identified its Binance ticker-validation use, so it was restored unchanged before the final verification.
+
+## UI27 session: 2026-08-16
+
+### Phase 60: Restore Coinbase as a primary quote source
+- **Status:** complete
+- Read the post-UI26 AppModel, REST client, domain, add-flow, feed, alert, persistence, test, and build context. Confirmed that UI26's combined market choice could select Coinbase while its row quote path had been deleted.
+- Restored Coinbase stats decoding, the quote request priority, pacer acquisition, 429 backoff, positive-last/unavailable-change semantics, and a source-owned 60-second poll loop. Kept Binance and Coinbase non-substituting, preserved legacy dual mappings with Binance precedence, and retained market-revision/remap rejection.
+- Reworked row liveness by the item's primary mapping: Binance requires fresh quote plus a connected socket; Coinbase requires a fresh polled quote and ignores socket state; no-quote Coinbase requests are stale while in flight and offline after failure.
+
+### Phase 61: Add coverage and verify UI27
+- **Status:** complete
+- Added pure quote-change coverage, Coinbase live-row coverage, and an in-flight Coinbase response rejection test after remapping. Restored the Coinbase-only polling caveat in Add coin without changing the selected-source disclosure.
+- `bash scripts/run-tests.sh`: 40 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh` passed strict Swift 6 warnings-as-errors, plist lint, signing verification, linkage, and bundled-icon checks. Forbidden UI/API and deleted-fallback-name audits passed.
+- No Aqua session or live network access was available. Desktop verification remains necessary for Coinbase-only live presentation, Binance/Coinbase source isolation during disconnects, and the Coinbase polling caveat.
+
+## UI28 session: 2026-08-16
+
+### Phase 62: Validate multi-market identity and error surfaces
+- **Status:** complete
+- Confirmed that per-venue product-ID uniqueness already rejects exact duplicate markets, while Binance stream IDs and feed product matching remain per-market. Removed only the obsolete CoinGecko-ID-only validation guard, preserving schema 1 and legacy dual mappings.
+- Made `ValidationFailure.localizedDescription` use its existing human-readable description by adding `LocalizedError`; other error types retain their existing localization behavior.
+
+### Phase 63: Reduce and pin Add coin presentation
+- **Status:** complete
+- Removed the redundant Coin heading and two visible-state explanation sentences. Only the candidate market list remains scrollable; the selected-source disclosure, conditional Coinbase caveat, Back/Add controls, and unchanged ticker warning are fixed below it.
+- Added a no-candidate outcome with a Back to search control and retained the selected coin identity. Appended the CoinGecko ID to the selectable/truncated/help-backed chart disclosure and removed the separate venue-mapping summary.
+
+### Phase 64: Verify and record UI28
+- **Status:** complete
+- Added same-coin/different-market, same-market rejection, and ValidationFailure message tests. `bash scripts/run-tests.sh`: 42 passed, 0 failed, 2 expected no-Aqua skips. `bash scripts/build-app.sh` passed strict compilation, plist lint, signing verification, linkage, and bundled-icon checks.
+- Forbidden API, fallback-name, duplicate-copy, and diff-whitespace audits passed. No Aqua or live venue verification was possible; the desktop checks are recorded in findings.
+
+## UI28 follow-up: 2026-08-16
+
+### Phase 63: Enlarge segmented control hit targets
+- **Status:** complete
+- Added `.controlSize(.large)` to the five `.pickerStyle(.segmented)` controls in `Views.swift`.
+- `bash scripts/build-app.sh` and `bash scripts/run-tests.sh` re-run after the edit: 42 passed, 0 failed, 2 expected no-Aqua skips.
+
+### Phase 64: Desktop verification of UI26 through UI28
+- **Status:** complete
+- Verified on the desktop 2026-08-16: a coin can now be watched in several markets, the ticker warning and Add stay pinned below a long market list, a coin with no markets shows the outcome instead of an empty picker, validation failures state their real reason instead of `error 0`, the chart disclosure carries the CoinGecko ID, and the enlarged pickers are easier to hit.
+- Still unverified: behaviour during an actual Binance disconnection, and a Coinbase-only row reaching live from polled quotes — both need conditions this session could not produce on demand.

@@ -682,6 +682,7 @@ private struct SettingsView: View {
                                     }
                                 }
                                 .pickerStyle(.segmented)
+                                .controlSize(.large)
                                 .labelsHidden()
                                 .panelFont(.body)
                                 .accessibilityLabel("Cooldown")
@@ -698,6 +699,7 @@ private struct SettingsView: View {
                                     }
                                 }
                                 .pickerStyle(.segmented)
+                                .controlSize(.large)
                                 .labelsHidden()
                                 .panelFont(.body)
                                 .accessibilityLabel("Hysteresis percent")
@@ -719,6 +721,7 @@ private struct SettingsView: View {
                                 }
                             }
                             .pickerStyle(.segmented)
+                            .controlSize(.large)
                             .panelFont(.headline)
                             .labelsHidden()
                             .accessibilityLabel("Text size")
@@ -944,6 +947,8 @@ private struct WatchRow: View {
     var body: some View {
         let presentation = model.rowPresentation(for: item)
         let isPrimary = model.primaryItemID == item.id
+        let isOffline = presentation == .offline
+        let alertsUnavailable = !model.alertsEnabled || presentation != .live
         HStack(spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Button {
@@ -957,6 +962,7 @@ private struct WatchRow: View {
                 .help(isPrimary ? "Currently shown in the menu bar" : "Show this coin in the menu bar")
                 Text(item.symbol)
                     .panelFont(.title, weight: .bold)
+                    .foregroundStyle(isOffline ? Color.secondary : Color.primary)
                     .lineLimit(1)
                 Text(model.quoteAsset(for: item))
                     .panelFont(.headline)
@@ -973,6 +979,7 @@ private struct WatchRow: View {
                 Text(AppModel.formatPrice(quote.price))
                     .panelFont(.title2, weight: .semibold)
                     .monospacedDigit()
+                    .foregroundStyle(isOffline ? Color.secondary : Color.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .frame(width: 170, alignment: .trailing)
@@ -988,24 +995,24 @@ private struct WatchRow: View {
                     Text(AppModel.formatChange(quote.change))
                         .panelFont(.title3)
                         .monospacedDigit()
-                        .foregroundStyle(changeColor(quote.change))
+                        .foregroundStyle(isOffline ? Color.secondary : changeColor(quote.change))
                 } else {
                     Text("—")
                         .panelFont(.title3)
                         .foregroundStyle(.secondary)
                 }
                 Button(action: editAlert) {
-                    Text(model.alertsEnabled ? "Alert" : "Alert · Off")
+                    Text(alertsUnavailable ? "Alert · Off" : "Alert")
                         .panelFont(.headline)
-                        .foregroundStyle(model.alertsEnabled ? .primary : .secondary)
-                        .strikethrough(!model.alertsEnabled)
+                        .foregroundStyle(alertsUnavailable ? Color.secondary : Color.primary)
+                        .strikethrough(alertsUnavailable)
                 }
                 .buttonStyle(.borderless)
             }
             .frame(width: 105, alignment: .trailing)
         }
         .padding(.vertical, 5)
-        .opacity(presentation == .stale ? 0.62 : 1)
+        .opacity(presentation == .stale || isOffline ? 0.62 : 1)
     }
 
     private func changeColor(_ change: QuoteChange) -> Color {
@@ -1075,6 +1082,7 @@ private struct SelectedCoinDetail: View {
                 }
             }
             .pickerStyle(.segmented)
+            .controlSize(.large)
             .panelFont(.body)
             .labelsHidden()
             .accessibilityLabel("Chart time range")
@@ -1085,18 +1093,14 @@ private struct SelectedCoinDetail: View {
                         minHeight: Self.minimumChartHeight,
                         maxHeight: chartFillsAvailableHeight ? .infinity : nil
                     )
-                Text("\(chart.range.rawValue) chart · \(chart.source.rawValue.capitalized)/\(chart.quoteAsset)")
-                    .panelFont(.body)
-                    .foregroundStyle(.secondary)
+                chartDisclosure("\(chart.range.rawValue) chart · \(chart.source.rawValue.capitalized)/\(chart.quoteAsset) · \(item.coinGeckoID)")
                 if chart.latestRefreshFailed {
                     Text("Refresh failed; showing the last available chart.")
                         .panelFont(.body)
                         .foregroundStyle(.orange)
                 }
             } else {
-                Label("\(model.persistedState.chartRange.rawValue) chart unavailable", systemImage: "chart.xyaxis.line")
-                    .panelFont(.body)
-                    .foregroundStyle(.secondary)
+                chartDisclosure("\(model.persistedState.chartRange.rawValue) chart unavailable · \(item.coinGeckoID)")
                     .frame(
                         maxWidth: .infinity,
                         minHeight: Self.minimumChartHeight,
@@ -1104,7 +1108,6 @@ private struct SelectedCoinDetail: View {
                     )
             }
 
-            mappingDetails
         }
         .onAppear { model.refreshChartIfNeeded(for: item.id) }
     }
@@ -1139,20 +1142,14 @@ private struct SelectedCoinDetail: View {
         return .accentColor
     }
 
-    private var mappingDetails: some View {
-        Text(mappingSummary)
+    private func chartDisclosure(_ text: String) -> some View {
+        Text(text)
             .panelFont(.body)
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.tail)
-            .help(mappingSummary)
+            .help(text)
             .textSelection(.enabled)
-    }
-
-    private var mappingSummary: String {
-        let binance = item.binanceMapping.map { "BN: \($0.productID)" } ?? "BN: none"
-        let coinbase = item.coinbaseMapping.map { "CB: \($0.productID)" } ?? "CB: none"
-        return ["CG: \(item.coinGeckoID)", binance, coinbase].joined(separator: " · ")
     }
 
     private func move(by offset: Int) {
@@ -1479,11 +1476,10 @@ private struct AddCoinView: View {
     let close: () -> Void
     @State private var searchText = ""
     @State private var project: SearchResult?
-    @State private var binanceCandidates: [VenueCandidate] = []
-    @State private var coinbaseCandidates: [VenueCandidate] = []
-    @State private var selectedBinance: String?
-    @State private var selectedCoinbase: String?
+    @State private var candidates: [VenueCandidate] = []
+    @State private var selectedCandidate: String?
     @State private var loadingCandidates = false
+    @State private var candidateLoadError: String?
     @State private var localError: String?
 
     var body: some View {
@@ -1535,12 +1531,76 @@ private struct AddCoinView: View {
             }
             if let localError { Text(localError).panelFont(.body).foregroundStyle(.red) }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
     private func confirmation(_ result: SearchResult) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(result.symbol)
+                    .panelFont(.title2, weight: .bold)
+                Text("\(result.name) · \(result.id)")
+                    .panelFont(.headline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+
+            if loadingCandidates {
+                ProgressView()
+            } else if let candidateLoadError {
+                Text(candidateLoadError)
+                    .panelFont(.body)
+                    .foregroundStyle(.red)
+                Button("Back to search") {
+                    project = nil
+                    self.candidateLoadError = nil
+                }
+                .panelFont(.headline)
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+            } else if candidates.isEmpty {
+                Text("No market was found on Binance or Coinbase for this ticker.")
+                    .panelFont(.body)
+                    .foregroundStyle(.secondary)
+                Button("Back to search") {
+                    project = nil
+                }
+                .panelFont(.headline)
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+            } else {
+                Text("Markets")
+                    .panelFont(.headline)
+                    .foregroundStyle(.secondary)
+                ScrollView {
+                    candidatePicker(candidates: candidates, selection: $selectedCandidate)
+                }
+                .frame(maxHeight: .infinity)
+
+                Text("The selected market is the only price source; if its feed stops, this row stops updating and alerts cannot fire.")
+                    .panelFont(.body)
+                    .foregroundStyle(.secondary)
+                if candidates.first(where: { $0.id == selectedCandidate })?.venue == .coinbase {
+                    Text("Coinbase polling runs every 60 seconds and can miss a brief alert breach.")
+                        .panelFont(.body)
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 12) {
+                    Button("Back") { project = nil }
+                        .panelFont(.headline)
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                    Button("Add") { confirm(result) }
+                        .panelFont(.headline)
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(!canAdd)
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 4)
                 Label(
                     "Ticker matches are string guesses, not verified identities. A wrong choice can show a plausible-looking wrong price.",
                     systemImage: "exclamationmark.triangle.fill"
@@ -1550,60 +1610,9 @@ private struct AddCoinView: View {
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Coin")
-                        .panelFont(.headline)
-                        .foregroundStyle(.secondary)
-                    Text(result.symbol)
-                        .panelFont(.title2, weight: .bold)
-                    Text("\(result.name) · \(result.id)")
-                        .panelFont(.headline)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                if loadingCandidates {
-                    ProgressView()
-                } else {
-                    Text("Markets")
-                        .panelFont(.headline)
-                        .foregroundStyle(.secondary)
-                    candidatePicker(
-                        title: "Binance · Live price source",
-                        description: "WebSocket ticks provide the primary live price.",
-                        candidates: binanceCandidates,
-                        selection: $selectedBinance
-                    )
-                    candidatePicker(
-                        title: "Coinbase · Fallback",
-                        description: "Polled every 60 seconds when Binance is missing or unavailable.",
-                        candidates: coinbaseCandidates,
-                        selection: $selectedCoinbase
-                    )
-                    Text("Coinbase polling is every 60 seconds and can miss a brief alert breach.")
-                        .panelFont(.body)
-                        .foregroundStyle(.secondary)
-                    Text("Add is enabled after both venues are answered and at least one has a market.")
-                        .panelFont(.body)
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 12) {
-                        Button("Back") { project = nil }
-                            .panelFont(.headline)
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-                        Button("Add") { confirm(result) }
-                            .panelFont(.headline)
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
-                            .disabled(!canAdd)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.top, 4)
-                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// Inline selection rather than a `Picker`.
@@ -1612,31 +1621,16 @@ private struct AddCoinView: View {
     /// window, which dismisses the whole panel. Every control here must resolve
     /// inside the panel itself.
     private func candidatePicker(
-        title: String,
-        description: String,
         candidates: [VenueCandidate],
         selection: Binding<String?>
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .panelFont(.title3, weight: .bold)
-            Text(description)
-                .panelFont(.body)
-                .foregroundStyle(.secondary)
-                .padding(.vertical, 4)
-            candidateRow(label: "No market", value: "__none__", selection: selection)
             ForEach(candidates) { candidate in
                 candidateRow(
-                    label: "\(candidate.productID) (\(candidate.baseAsset)/\(candidate.quoteAsset))",
-                    value: candidate.productID,
+                    label: "\(candidate.venue.rawValue.capitalized) · \(candidate.productID) (\(candidate.baseAsset)/\(candidate.quoteAsset))",
+                    value: candidate.id,
                     selection: selection
                 )
-            }
-            if candidates.isEmpty {
-                Text("No ticker-matched candidates.")
-                    .panelFont(.body)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 7)
             }
         }
         .padding(10)
@@ -1645,8 +1639,7 @@ private struct AddCoinView: View {
     }
 
     private var canAdd: Bool {
-        guard let selectedBinance, let selectedCoinbase else { return false }
-        return selectedBinance != "__none__" || selectedCoinbase != "__none__"
+        selectedCandidate != nil
     }
 
     private func candidateRow(label: String, value: String, selection: Binding<String?>) -> some View {
@@ -1673,26 +1666,32 @@ private struct AddCoinView: View {
     private func choose(_ result: SearchResult) {
         project = result
         loadingCandidates = true
-        selectedBinance = nil
-        selectedCoinbase = nil
+        selectedCandidate = nil
+        candidateLoadError = nil
+        localError = nil
         Task { @MainActor in
             switch await model.loadCandidates(for: result) {
             case .success(let values):
-                binanceCandidates = values.0
-                coinbaseCandidates = values.1
+                candidates = values
             case .failure(let failure):
-                localError = failure.message
+                candidateLoadError = failure.message
             }
             loadingCandidates = false
         }
     }
 
     private func confirm(_ result: SearchResult) {
-        let binance = binanceCandidates.first { $0.productID == selectedBinance }
-        let coinbase = coinbaseCandidates.first { $0.productID == selectedCoinbase }
+        guard let selectedCandidate,
+              let candidate = candidates.first(where: { $0.id == selectedCandidate }) else {
+            localError = "Choose a market before adding the coin."
+            return
+        }
+        let mapping = mapping(candidate)
         let item = WatchItem(
             id: UUID(), coinGeckoID: result.id, symbol: result.symbol.uppercased(), name: result.name,
-            binanceMapping: binance.map(mapping), coinbaseMapping: coinbase.map(mapping), alert: nil
+            binanceMapping: candidate.venue == .binance ? mapping : nil,
+            coinbaseMapping: candidate.venue == .coinbase ? mapping : nil,
+            alert: nil
         )
         do {
             try model.addItem(item)
@@ -1757,6 +1756,7 @@ private struct AlertEditorView: View {
                 Text("Below").tag(AlertDirection.below)
             }
             .pickerStyle(.segmented)
+            .controlSize(.large)
             LabeledContent("Threshold") { TextField("", text: $threshold).textFieldStyle(.roundedBorder) }
             LabeledContent("Cooldown seconds") { TextField("", text: $cooldown).textFieldStyle(.roundedBorder) }
             LabeledContent("Hysteresis percent") { TextField("", text: $hysteresis).textFieldStyle(.roundedBorder) }
