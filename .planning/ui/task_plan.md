@@ -37,57 +37,25 @@ defects appeared within minutes of the first real desktop launch.
   read-only behaviour has never been seen on a desktop.
 
 ### The panel background lets whatever is behind it bleed through
-Raised 2026-08-15. Not yet evaluated.
-
-Confirmed on the desktop: with a green-heavy window behind the panel, the middle
-of the coin list takes on a visible green cast and the rows there are harder to
-read. The tint moves with whatever is behind the panel, so the list's legibility
-depends on an application BitPrice has nothing to do with.
-
-The panel never sets a background of its own. `Views.swift` applies backgrounds
-only to individual cards and rows (`.secondary.opacity(0.08)` and similar), so
-the full-panel surface is whatever `MenuBarExtra(.window)` supplies by default,
-which is translucent.
-
-Worth considering: give the panel an explicit opaque or near-opaque background,
-or a material chosen for legibility rather than the default. Two things to check
-before settling on one:
-
-- The panel must stay correct in both light and dark appearance, and follow a
-  change while it is open.
-- Fully opaque loses the visual connection to the menu bar that a menu-bar app
-  normally has. A thicker material may be the better trade than flat opacity —
-  worth comparing side by side rather than picking from the name.
+Raised 2026-08-15. **Resolved in ui24.** The panel now applies `.regularMaterial`
+after its fixed frame, so the surface is defined rather than inherited. Verified
+on the desktop in dark appearance: no colour cast, cards still distinct. Light
+appearance and an appearance change made while the panel is open are still
+unverified.
 
 ### Quit is too close to where the pointer already is
-Raised 2026-08-15. Not yet evaluated.
-
-Opening Settings means clicking the gear at the top-right of the panel. Quit sits
-at the top-right of the Settings screen — the same corner the pointer is already
-in. A double-click on the gear, or a click that lands just after the screen
-swaps, puts the second click on Quit and the app exits.
-
-This is a near-miss by construction, and it is made worse by two earlier
-decisions that were each right on their own: Quit has no confirmation step (the
-`PanelRoute.confirmQuit` screen was deliberately removed, on the reasoning that
-gear → Settings → Quit is already three steps), and Back/Quit were deliberately
-placed at opposite ends so a destructive control would not sit next to a safe
-one. Neither anticipated that the *entry* point shares a corner with Quit.
-
-Worth considering: move Quit away from the top edge entirely (it is the least
-frequent action on the screen and does not need prime position), or reinstate a
-confirmation now that the adjacency is known, or both. Note that a confirmation
-cannot be an alert or dialog — the panel closes the moment it loses key-window
-status.
+Raised 2026-08-15. **Resolved in ui24.** Quit moved to the footer row at the
+bottom-right, sharing a line with the closing disclosure. No confirmation step
+was added: the misclick was caused by proximity to the gear, and moving the
+button removes that path rather than patching it. Quit kept its prominent red
+style — see `findings.md` for why that does not contradict the move.
 
 ### Settings item order
-Raised 2026-08-15. Not yet evaluated.
-
-The Settings cards are currently ordered Price alerts, Alert defaults, Text size,
-Launch at login, which is the order they were built in rather than an order
-chosen for the reader. Decide a deliberate order — most-changed first, or
-grouped by what they affect — and note the reasoning so the next addition has
-somewhere obvious to go.
+Raised 2026-08-15. **Resolved in ui24.** Ordered Launch at login, Price alerts,
+Alert defaults, Text size, by the rule **effect reach beyond the app, widest
+first; within a group, a parent precedes what it governs**. Use that rule to
+place the next setting added. Text size being last is an accepted cost, recorded
+in `findings.md`.
 
 ### Redesign the app icon
 Raised 2026-08-15. Not yet evaluated.
@@ -561,4 +529,12 @@ Complete
 - [x] Derive the segment gap threshold from each range's bucket duration and add pure normal/missing-bucket coverage for all ranges.
 - [x] Give the list the reclaimed space through a defensible finite-height proportion without changing chart axes/data or row typography.
 - [x] Run strict tests/build/audits and record the Extra Large/layout and no-Aqua limitations.
+- **Status:** complete
+
+## UI24: opaque panel and deliberate Settings layout
+- [x] Apply regular material after the fixed panel frame, keeping the existing card fills unless desktop review shows a contrast defect.
+- [x] Move Quit into the wrapped first-baseline footer row with a bordered destructive style and keep Back as the only header control.
+- [x] Reorder the unchanged Settings cards by effect reach: Launch at login, Price alerts, Alert defaults, Text size.
+- [x] Preserve bottom placement when content fits and add a bounded scroll fallback for dynamic Extra Large overflow.
+- [x] Run strict tests/build checks and append the material, ordering, accepted cost, and no-Aqua notes.
 - **Status:** complete

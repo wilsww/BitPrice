@@ -517,3 +517,16 @@
 - Added gap tests for normal and missing bucket spacing at every chart range. `bash scripts/run-tests.sh`: 38 passed, 0 failed, 2 expected no-Aqua skips.
 - `bash scripts/build-app.sh` passed strict Swift 6 warnings-as-errors, plist lint, signing verification, linkage, and bundled icon checks. Forbidden-token and bare-5,400 audits passed.
 - No Aqua GUI session was available; desktop visual verification remains necessary for 7d/30d drawing, 24h real-gap behavior, and Extra Large layout balance.
+
+## UI24 session: 2026-08-15
+
+### Phase 53: Harden panel background and Settings layout
+- **Status:** complete
+- Added post-frame regular material, moved Quit into the wrapped first-baseline footer row, reordered the four unchanged cards, and made Settings scrollable through a finite GeometryReader-backed content minimum.
+
+### Phase 54: Verify UI24
+- **Status:** complete
+- Strict tests: 38 passed, 0 failed, 2 expected no-Aqua skips. Strict app build and bundle checks passed.
+- Desktop verification passed at Extra Large: no colour cast from a window behind the panel, cards still distinct against the material, Quit visible and reachable in the footer, the disclosure text wrapping rather than truncating, and the reordered cards otherwise unchanged.
+- Two follow-up edits were made after that review and re-verified with a strict build and the full test run: Quit restored to `.borderedProminent`/`.tint(.red)` with the label shortened to "Quit", and the `SettingsView.body` block re-indented to match its enclosing `GeometryReader`/`ScrollView` (whitespace only — the implementation had left the original nesting depth in place when it added the two wrappers).
+- Still unverified on the desktop: light appearance (the review was in dark), and an appearance change made while the panel is open.
