@@ -397,6 +397,22 @@ protocol PriceFeedSink: AnyObject {
     func feedStateDidChange(_ state: FeedLifecycle, venue: Venue)
 }
 
+@MainActor
+protocol PriceFeed: AnyObject {
+    var venue: Venue { get }
+    func attachSink(_ sink: any PriceFeedSink)
+    func replaceProducts(_ productIDs: Set<String>)
+    func suspendForSleep()
+    func resumeAfterWake()
+    func shutdown()
+}
+
+@MainActor
+protocol WebSocketLifecycleReceiving: AnyObject {
+    func didOpen(taskIdentifier: Int, connectionID: UUID)
+    func didClose(taskIdentifier: Int, connectionID: UUID, failure: NetworkFailure)
+}
+
 enum WebSocketInboundMessage: Sendable {
     case string(String)
     case data(Data)
@@ -407,6 +423,7 @@ protocol WebSocketTaskTransport: AnyObject {
     var taskIdentifier: Int { get }
     var maximumMessageSize: Int { get set }
     func resume()
+    func send(_ message: String) async throws
     func receive() async throws -> WebSocketInboundMessage
     func cancel()
 }

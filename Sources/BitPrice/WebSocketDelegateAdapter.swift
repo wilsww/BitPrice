@@ -2,11 +2,16 @@ import Foundation
 
 @MainActor
 final class WebSocketDelegateAdapter: NSObject, URLSessionWebSocketDelegate, WebSocketDelegateReceiving {
-    private weak var controller: BinanceFeedController?
+    private weak var receiver: (any WebSocketLifecycleReceiving)?
+    private let venue: Venue
     private var connectionByTaskIdentifier: [Int: UUID] = [:]
 
-    func attach(controller: BinanceFeedController) {
-        self.controller = controller
+    init(venue: Venue) {
+        self.venue = venue
+    }
+
+    func attach(receiver: any WebSocketLifecycleReceiving) {
+        self.receiver = receiver
     }
 
     func register(taskIdentifier: Int, connectionID: UUID) {
@@ -26,7 +31,7 @@ final class WebSocketDelegateAdapter: NSObject, URLSessionWebSocketDelegate, Web
         let taskIdentifier = webSocketTask.taskIdentifier
         Task { @MainActor [weak self] in
             guard let self, let connectionID = self.connectionByTaskIdentifier[taskIdentifier] else { return }
-            self.controller?.didOpen(taskIdentifier: taskIdentifier, connectionID: connectionID)
+            self.receiver?.didOpen(taskIdentifier: taskIdentifier, connectionID: connectionID)
         }
     }
 
@@ -37,14 +42,14 @@ final class WebSocketDelegateAdapter: NSObject, URLSessionWebSocketDelegate, Web
         reason: Data?
     ) {
         let taskIdentifier = webSocketTask.taskIdentifier
-        let failure = NetworkFailure(
-            domain: "websocket-close",
-            code: Int(closeCode.rawValue),
-            message: "Binance WebSocket closed (\(closeCode.rawValue))"
-        )
         Task { @MainActor [weak self] in
             guard let self, let connectionID = self.connectionByTaskIdentifier[taskIdentifier] else { return }
-            self.controller?.didClose(taskIdentifier: taskIdentifier, connectionID: connectionID, failure: failure)
+            let failure = NetworkFailure(
+                domain: "websocket-close",
+                code: Int(closeCode.rawValue),
+                message: "\(self.venue.displayName) WebSocket closed (\(closeCode.rawValue))"
+            )
+            self.receiver?.didClose(taskIdentifier: taskIdentifier, connectionID: connectionID, failure: failure)
         }
     }
 }
@@ -65,6 +70,14 @@ final class SystemWebSocketTaskTransport: WebSocketTaskTransport {
     }
 
     func resume() { task.resume() }
+
+    func send(_ message: String) async throws {
+        do {
+            try await task.send(.string(message))
+        } catch {
+            throw NetworkFailure.wrapping(error, domain: "websocket-send")
+        }
+    }
 
     func receive() async throws -> WebSocketInboundMessage {
         do {

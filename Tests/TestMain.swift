@@ -5,6 +5,16 @@ struct TestFailure: Error, CustomStringConvertible {
     let description: String
 }
 
+private struct TestOKXSubscription: Decodable {
+    struct Argument: Decodable {
+        let channel: String
+        let instId: String
+    }
+
+    let op: String
+    let args: [Argument]
+}
+
 @MainActor
 func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
     if !condition() { throw TestFailure(description: message) }
@@ -144,11 +154,18 @@ final class FakeSocket: WebSocketTaskTransport {
     var maximumMessageSize = 0
     private(set) var resumeCount = 0
     private(set) var cancelCount = 0
+    private(set) var sentMessages: [String] = []
+    var sendFailure: NetworkFailure?
     private var pending: CheckedContinuation<WebSocketInboundMessage, any Error>?
     private var queued: [WebSocketInboundMessage] = []
 
     init(id: Int) { taskIdentifier = id }
     func resume() { resumeCount += 1 }
+
+    func send(_ message: String) async throws {
+        if let sendFailure { throw sendFailure }
+        sentMessages.append(message)
+    }
 
     func receive() async throws -> WebSocketInboundMessage {
         if !queued.isEmpty { return queued.removeFirst() }
@@ -575,7 +592,7 @@ struct BitPriceTests {
                 )
                 try expect(sources[0].liveness == .push &&
                                sources[1].liveness == .polled(seconds: 60) &&
-                               sources[2].liveness == .polled(seconds: 30),
+                               sources[2].liveness == .push,
                            "quote scheduling and polling disclosures would use the wrong venue cadence")
                 try expect(sources.allSatisfy { source in
                     ChartRange.allCases.allSatisfy(source.supports)
@@ -713,6 +730,197 @@ struct BitPriceTests {
                 try expect(sink.ticks.count == 1 && sink.ticks[0].productID == "BTCUSDT", "valid ticker rejected")
                 parts.controller.shutdown()
             },
+            AcceptanceTest(name: "14a OKX sends one batched ticker subscription after open") {
+                let parts = okxFeedParts()
+                parts.feed.replaceProducts(["ETH-USDT", "BTC-USDT"])
+                let socket = try expectOne(parts.session.sockets)
+                try expect(socket.sentMessages.isEmpty,
+                           "OKX tried to subscribe before its WebSocket connection opened")
+                parts.feed.didOpen(
+                    taskIdentifier: socket.taskIdentifier,
+                    connectionID: parts.feed.connectionID
+                )
+                await Task.yield(); await Task.yield()
+
+                let message = try expectOne(socket.sentMessages)
+                let subscription = try JSONDecoder().decode(TestOKXSubscription.self, from: Data(message.utf8))
+                try expect(
+                    parts.session.urls.first?.absoluteString == "wss://ws.okx.com:8443/ws/v5/public" &&
+                        subscription.op == "subscribe" &&
+                        subscription.args.map { "\($0.channel):\($0.instId)" }.sorted() == [
+                            "tickers:BTC-USDT", "tickers:ETH-USDT"
+                        ],
+                    "OKX would connect to the wrong endpoint or omit a selected market from its ticker subscription"
+                )
+                parts.feed.shutdown()
+            },
+            AcceptanceTest(name: "14b OKX product replacement reconnects with a fresh subscription") {
+                let parts = okxFeedParts()
+                parts.feed.replaceProducts(["BTC-USDT"])
+                let firstSocket = try expectOne(parts.session.sockets)
+                parts.feed.didOpen(
+                    taskIdentifier: firstSocket.taskIdentifier,
+                    connectionID: parts.feed.connectionID
+                )
+                await Task.yield(); await Task.yield()
+
+                parts.feed.replaceProducts(["ETH-USDT"])
+                try expect(
+                    parts.factory.creationCount == 1 &&
+                        parts.session.sockets.count == 2 &&
+                        firstSocket.cancelCount == 1,
+                    "changing an OKX market would leak a session or leave the superseded socket running"
+                )
+                let secondSocket = parts.session.sockets[1]
+                parts.feed.didOpen(
+                    taskIdentifier: secondSocket.taskIdentifier,
+                    connectionID: parts.feed.connectionID
+                )
+                await Task.yield(); await Task.yield()
+                let message = try expectOne(secondSocket.sentMessages)
+                let subscription = try JSONDecoder().decode(TestOKXSubscription.self, from: Data(message.utf8))
+                try expect(
+                    subscription.op == "subscribe" &&
+                        subscription.args.map(\.instId) == ["ETH-USDT"] &&
+                        firstSocket.sentMessages.count == 1,
+                    "an OKX remap would keep streaming the old market or duplicate subscription frames"
+                )
+                parts.feed.shutdown()
+            },
+            AcceptanceTest(name: "14c OKX event frames never become price ticks") {
+                let parts = okxFeedParts()
+                let sink = TestFeedSink()
+                parts.feed.attachSink(sink)
+                parts.feed.replaceProducts(["BTC-USDT"])
+                let socket = try expectOne(parts.session.sockets)
+                parts.feed.didOpen(
+                    taskIdentifier: socket.taskIdentifier,
+                    connectionID: parts.feed.connectionID
+                )
+                await Task.yield(); await Task.yield()
+                socket.enqueue(.string(#"{"event":"subscribe","arg":{"channel":"tickers","instId":"BTC-USDT"}}"#))
+                await Task.yield(); await Task.yield()
+                try expect(sink.ticks.isEmpty && parts.feed.state == .connected,
+                           "an OKX subscription acknowledgement appeared as a zero or malformed market price")
+
+                socket.enqueue(.string(#"{"event":"error","code":"60012","msg":"invalid request"}"#))
+                await Task.yield(); await Task.yield()
+                try expect(
+                    sink.ticks.isEmpty && parts.feed.state == .backingOff(attempt: 1, delay: 1),
+                    "an OKX subscription error appeared as a price or left a dead connection looking healthy"
+                )
+                parts.feed.shutdown()
+            },
+            AcceptanceTest(name: "14d OKX ticker parsing and subscription filtering") {
+                let parts = okxFeedParts()
+                let sink = TestFeedSink()
+                parts.feed.attachSink(sink)
+                parts.feed.replaceProducts(["BTC-USDT"])
+                let socket = try expectOne(parts.session.sockets)
+                parts.feed.didOpen(
+                    taskIdentifier: socket.taskIdentifier,
+                    connectionID: parts.feed.connectionID
+                )
+                await Task.yield(); await Task.yield()
+                socket.enqueue(.string(#"{"arg":{"channel":"tickers","instId":"ETH-USDT"},"data":[{"instId":"ETH-USDT","last":"3000","open24h":"2900","ts":"1786876477359"}]}"#))
+                socket.enqueue(.string(#"{"arg":{"channel":"tickers","instId":"BTC-USDT"},"data":[{"instId":"BTC-USDT","last":"63003.3","open24h":"0","ts":"1786876477359"}]}"#))
+                socket.enqueue(.string(#"{"arg":{"channel":"tickers","instId":"BTC-USDT"},"data":[{"instId":"BTC-USDT","last":"63003.3","open24h":"63031.4","ts":"1786876477359"}]}"#))
+                await Task.yield(); await Task.yield(); await Task.yield(); await Task.yield()
+
+                let tick = try expectOne(sink.ticks)
+                let last = Decimal(string: "63003.3")!
+                let open = Decimal(string: "63031.4")!
+                try expect(
+                    tick == PriceTick(
+                        venue: .okx,
+                        productID: "BTC-USDT",
+                        price: last,
+                        changePercent: (last - open) / open * 100,
+                        eventDate: Date(timeIntervalSince1970: 1_786_876_477.359),
+                        receivedInstant: FixedContinuousClock().now()
+                    ),
+                    "OKX would show the wrong price, 24-hour change, or event time for the selected market"
+                )
+                parts.feed.shutdown()
+            },
+            AcceptanceTest(name: "14e one feed backing off cannot disturb another feed") {
+                let binance = controllerParts()
+                let okx = okxFeedParts()
+                let sink = TestFeedSink()
+                let coordinator = PriceFeedCoordinator(feeds: [binance.controller, okx.feed])
+                coordinator.attachSink(sink)
+                coordinator.replaceProducts([
+                    .binance: ["BTCUSDT"],
+                    .okx: ["BTC-USDT"]
+                ])
+                let binanceTask = binance.controller.currentTaskIdentifier!
+                let binanceConnection = binance.controller.connectionID
+                binance.controller.didOpen(taskIdentifier: binanceTask, connectionID: binanceConnection)
+                let okxTask = okx.feed.currentTaskIdentifier!
+                let okxConnection = okx.feed.connectionID
+                okx.feed.didOpen(taskIdentifier: okxTask, connectionID: okxConnection)
+                await Task.yield(); await Task.yield()
+                try expect(binance.controller.state == .connected && okx.feed.state == .connected,
+                           "starting one push venue prevented the other venue from becoming live")
+
+                okx.feed.didClose(
+                    taskIdentifier: okxTask,
+                    connectionID: okxConnection,
+                    failure: NetworkFailure(domain: "test", code: 1, message: "OKX failed")
+                )
+                try expect(
+                    okx.feed.state == .backingOff(attempt: 1, delay: 1) &&
+                        okx.feed.transportFailureAttempt == 1 &&
+                        binance.controller.state == .connected &&
+                        binance.controller.connectionID == binanceConnection &&
+                        binance.controller.currentTaskIdentifier == binanceTask &&
+                        binance.controller.transportFailureAttempt == 0,
+                    "an outage at one venue disconnected or delayed prices from the other healthy venue"
+                )
+                coordinator.shutdown()
+            },
+            AcceptanceTest(name: "14g the coordinator forwards each state under its own venue") {
+                // 14e proves the feeds keep their own state. This proves the
+                // coordinator does not relabel it on the way out: it is the one
+                // place a venue's lifecycle could be attributed to every venue,
+                // which is exactly what connectionStates being keyed by venue
+                // exists to prevent.
+                let binance = controllerParts()
+                let okx = okxFeedParts()
+                let sink = TestFeedSink()
+                let coordinator = PriceFeedCoordinator(feeds: [binance.controller, okx.feed])
+                coordinator.attachSink(sink)
+                coordinator.replaceProducts([.binance: ["BTCUSDT"]])
+                try expect(
+                    sink.states.contains(where: { $0.state == .connecting && $0.venue == .binance }) &&
+                        !sink.states.contains(where: { $0.venue == .okx && $0.state == .connecting }),
+                    "starting one venue's feed was reported as though every venue had started, so a row would claim a connection it does not have"
+                )
+                let binanceTask = binance.controller.currentTaskIdentifier!
+                binance.controller.didOpen(taskIdentifier: binanceTask, connectionID: binance.controller.connectionID)
+                try expect(
+                    sink.states.last?.state == .connected && sink.states.last?.venue == .binance,
+                    "a venue coming online was attributed to the wrong venue, so the wrong rows would go live"
+                )
+                coordinator.shutdown()
+            },
+            AcceptanceTest(name: "14f OKX subscribe send failure enters backoff") {
+                let parts = okxFeedParts()
+                parts.feed.replaceProducts(["BTC-USDT"])
+                let socket = try expectOne(parts.session.sockets)
+                socket.sendFailure = NetworkFailure(domain: "test-send", code: 1, message: "send failed")
+                parts.feed.didOpen(
+                    taskIdentifier: socket.taskIdentifier,
+                    connectionID: parts.feed.connectionID
+                )
+                await Task.yield(); await Task.yield()
+                try expect(
+                    parts.feed.state == .backingOff(attempt: 1, delay: 1) &&
+                        parts.feed.transportFailureAttempt == 1 && socket.cancelCount == 1,
+                    "a failed OKX subscription send left the row looking connected without any prices arriving"
+                )
+                parts.feed.shutdown()
+            },
             AcceptanceTest(name: "15 Coinbase quote change is unavailable without a positive open") {
                 let bodies = [
                     Data(#"{"last":"100","open":"0"}"#.utf8),
@@ -782,7 +990,7 @@ struct BitPriceTests {
                 let parts = controllerParts()
                 let model = AppModel(
                     persistenceStore: store, processLock: lock, restClients: clients(transport: transport),
-                    feedController: parts.controller, notifications: FakeNotifications(),
+                    priceFeeds: [parts.controller], notifications: FakeNotifications(),
                     wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
                     continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
                     startNetworking: false, observeSleepWake: false
@@ -810,7 +1018,7 @@ struct BitPriceTests {
                 let parts = controllerParts()
                 let model = AppModel(
                     persistenceStore: store, processLock: lock, restClients: clients(transport: transport),
-                    feedController: parts.controller, notifications: FakeNotifications(),
+                    priceFeeds: [parts.controller], notifications: FakeNotifications(),
                     wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
                     continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
                     startNetworking: false, observeSleepWake: false
@@ -974,7 +1182,7 @@ struct BitPriceTests {
                 let parts = controllerParts()
                 let model = AppModel(
                     persistenceStore: store, processLock: lock, restClients: clients(transport: delayed),
-                    feedController: parts.controller, notifications: FakeNotifications(),
+                    priceFeeds: [parts.controller], notifications: FakeNotifications(),
                     wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
                     continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
                     startNetworking: false, observeSleepWake: false
@@ -1246,7 +1454,7 @@ struct BitPriceTests {
                 let wall = FixedWallClock(value: Date(timeIntervalSince1970: 2_000))
                 let model = AppModel(
                     persistenceStore: store, processLock: lock, restClients: rest,
-                    feedController: parts.controller, notifications: notifications,
+                    priceFeeds: [parts.controller], notifications: notifications,
                     wallClock: wall, continuousClock: FixedContinuousClock(),
                     suspendingClock: FixedSuspendingClock(), startNetworking: false, observeSleepWake: false
                 )
@@ -1279,7 +1487,7 @@ struct BitPriceTests {
                     persistenceStore: store,
                     processLock: lock,
                     restClients: clients(transport: StubHTTPTransport([])),
-                    feedController: parts.controller,
+                    priceFeeds: [parts.controller],
                     notifications: FakeNotifications(),
                     wallClock: wall,
                     continuousClock: FixedContinuousClock(),
@@ -1344,7 +1552,7 @@ struct BitPriceTests {
                     persistenceStore: try PersistenceStore(rootDirectory: root),
                     processLock: try ProcessLock(rootDirectory: root),
                     restClients: clients(transport: StubHTTPTransport([])),
-                    feedController: controllerParts().controller,
+                    priceFeeds: [controllerParts().controller],
                     notifications: FakeNotifications(),
                     wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
                     continuousClock: FixedContinuousClock(),
@@ -1377,7 +1585,7 @@ struct BitPriceTests {
                 let model = AppModel(
                     persistenceStore: store, processLock: try ProcessLock(rootDirectory: root),
                     restClients: clients(transport: StubHTTPTransport([])),
-                    feedController: controllerParts().controller, notifications: FakeNotifications(),
+                    priceFeeds: [controllerParts().controller], notifications: FakeNotifications(),
                     wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
                     continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
                     startNetworking: false, observeSleepWake: false
@@ -1412,7 +1620,7 @@ struct BitPriceTests {
                 let model = AppModel(
                     persistenceStore: store, processLock: try ProcessLock(rootDirectory: root),
                     restClients: clients(transport: StubHTTPTransport([])),
-                    feedController: controllerParts().controller, notifications: FakeNotifications(),
+                    priceFeeds: [controllerParts().controller], notifications: FakeNotifications(),
                     wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
                     continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
                     startNetworking: false, observeSleepWake: false
@@ -1465,7 +1673,7 @@ struct BitPriceTests {
                 let model = AppModel(
                     persistenceStore: store, processLock: try ProcessLock(rootDirectory: root),
                     restClients: clients(transport: StubHTTPTransport([])),
-                    feedController: controllerParts().controller, notifications: FakeNotifications(),
+                    priceFeeds: [controllerParts().controller], notifications: FakeNotifications(),
                     wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
                     continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
                     startNetworking: false, observeSleepWake: false
@@ -1481,8 +1689,8 @@ struct BitPriceTests {
                            "Binance stopped reporting a push feed, so the alert editor would claim it polls")
                 try expect(model.sourceLiveness(for: .coinbase) == .polled(seconds: 60),
                            "Coinbase stopped reporting a 60-second poll, so its missed-breach caveat would vanish")
-                try expect(model.sourceLiveness(for: .okx) == .polled(seconds: 30),
-                           "OKX stopped reporting a 30-second poll, so users would get the wrong alert timing warning")
+                try expect(model.sourceLiveness(for: .okx) == .push,
+                           "OKX stopped reporting a push feed, so the app would poll REST and show an obsolete timing warning")
                 try expect(model.configuredSourceNames == "Binance, Coinbase or OKX",
                            "the no-market message no longer names the configured sources")
                 model.shutdown()
@@ -1500,7 +1708,7 @@ struct BitPriceTests {
                     persistenceStore: try PersistenceStore(rootDirectory: root),
                     processLock: try ProcessLock(rootDirectory: root),
                     restClients: clients(transport: StubHTTPTransport([])),
-                    feedController: controllerParts().controller,
+                    priceFeeds: [controllerParts().controller],
                     notifications: FakeNotifications(),
                     wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
                     continuousClock: FixedContinuousClock(),
@@ -1545,7 +1753,7 @@ struct BitPriceTests {
                     persistenceStore: try PersistenceStore(rootDirectory: root),
                     processLock: try ProcessLock(rootDirectory: root),
                     restClients: clients(transport: StubHTTPTransport([])),
-                    feedController: controllerParts().controller,
+                    priceFeeds: [controllerParts().controller],
                     notifications: FakeNotifications(),
                     wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
                     continuousClock: FixedContinuousClock(),
@@ -1890,6 +2098,16 @@ struct BitPriceTests {
     }
 
     @MainActor
+    static func okxFeedParts() -> (feed: OKXFeed, session: FakeWebSocketSession, factory: FakeWebSocketFactory) {
+        let session = FakeWebSocketSession()
+        let factory = FakeWebSocketFactory(session: session)
+        let feed = OKXFeed(
+            sessionFactory: factory, continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock()
+        )
+        return (feed, session, factory)
+    }
+
+    @MainActor
     static func recoveryModel(root: URL) throws -> AppModel {
         let store = try PersistenceStore(rootDirectory: root)
         let lock = try ProcessLock(rootDirectory: root)
@@ -1898,7 +2116,7 @@ struct BitPriceTests {
             persistenceStore: store,
             processLock: lock,
             restClients: clients(transport: StubHTTPTransport([])),
-            feedController: parts.controller,
+            priceFeeds: [parts.controller],
             notifications: FakeNotifications(),
             wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
             continuousClock: FixedContinuousClock(),

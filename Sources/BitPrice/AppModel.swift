@@ -10,6 +10,47 @@ enum RequestActivity: Equatable, Sendable {
 }
 
 @MainActor
+final class PriceFeedCoordinator: PriceFeedSink {
+    private let feeds: [any PriceFeed]
+    private weak var sink: (any PriceFeedSink)?
+
+    init(feeds: [any PriceFeed]) {
+        self.feeds = feeds
+    }
+
+    func attachSink(_ sink: any PriceFeedSink) {
+        self.sink = sink
+        for feed in feeds { feed.attachSink(self) }
+    }
+
+    func replaceProducts(_ productIDsByVenue: [Venue: Set<String>]) {
+        for feed in feeds {
+            feed.replaceProducts(productIDsByVenue[feed.venue] ?? [])
+        }
+    }
+
+    func suspendForSleep() {
+        for feed in feeds { feed.suspendForSleep() }
+    }
+
+    func resumeAfterWake() {
+        for feed in feeds { feed.resumeAfterWake() }
+    }
+
+    func shutdown() {
+        for feed in feeds { feed.shutdown() }
+    }
+
+    func feedDidAccept(_ tick: PriceTick) {
+        sink?.feedDidAccept(tick)
+    }
+
+    func feedStateDidChange(_ state: FeedLifecycle, venue: Venue) {
+        sink?.feedStateDidChange(state, venue: venue)
+    }
+}
+
+@MainActor
 final class AppModel: ObservableObject, PriceFeedSink {
     @Published private(set) var persistedState: PersistedState
     @Published private(set) var quotes: [UUID: Quote] = [:]
@@ -27,7 +68,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
     private let restClients: RESTClients
     private let priceSources: [any PriceSource]
     private let priceSourcesByVenue: [Venue: any PriceSource]
-    private let feedController: BinanceFeedController
+    private let feedCoordinator: PriceFeedCoordinator
     private let notifications: any NotificationSubmitting
     private let wallClock: any WallClock
     private let continuousClock: any ContinuousTimeSource
@@ -62,7 +103,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
         processLock: ProcessLock,
         restClients: RESTClients,
         priceSources: [any PriceSource]? = nil,
-        feedController: BinanceFeedController,
+        priceFeeds: [any PriceFeed],
         notifications: any NotificationSubmitting,
         wallClock: any WallClock,
         continuousClock: any ContinuousTimeSource,
@@ -77,7 +118,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
         let sources = priceSources ?? configuredPriceSources(clients: restClients)
         self.priceSources = sources
         self.priceSourcesByVenue = Dictionary(sources.map { ($0.venue, $0) }, uniquingKeysWith: { first, _ in first })
-        self.feedController = feedController
+        self.feedCoordinator = PriceFeedCoordinator(feeds: priceFeeds)
         self.notifications = notifications
         self.wallClock = wallClock
         self.continuousClock = continuousClock
@@ -127,7 +168,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
             """
         }
         for item in persistedState.items { marketRevisions[item.id] = 0 }
-        feedController.attachSink(self)
+        feedCoordinator.attachSink(self)
         if observeSleepWake { installSleepWakeObservers() }
         if startNetworking { startNetworkWork() }
     }
@@ -145,16 +186,23 @@ final class AppModel: ObservableObject, PriceFeedSink {
             continuousClock: continuousClock,
             wallClock: wallClock
         )
-        let feed = BinanceFeedController(
-            sessionFactory: SystemWebSocketSessionFactory(),
-            continuousClock: continuousClock,
-            suspendingClock: suspendingClock
-        )
+        let feeds: [any PriceFeed] = [
+            BinanceFeedController(
+                sessionFactory: SystemWebSocketSessionFactory(),
+                continuousClock: continuousClock,
+                suspendingClock: suspendingClock
+            ),
+            OKXFeed(
+                sessionFactory: SystemWebSocketSessionFactory(),
+                continuousClock: continuousClock,
+                suspendingClock: suspendingClock
+            )
+        ]
         return AppModel(
             persistenceStore: store,
             processLock: lock,
             restClients: clients,
-            feedController: feed,
+            priceFeeds: feeds,
             notifications: NotificationService(),
             wallClock: wallClock,
             continuousClock: continuousClock,
@@ -175,7 +223,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
         try persistenceStore.save(draft)
         persistedState = draft
         reconcileRuntimeAfterEdit(oldState: oldState, newState: draft)
-        feedController.replaceProducts(binanceProductIDs(in: draft))
+        feedCoordinator.replaceProducts(productIDsByVenue(in: draft))
         reconcilePeriodicLoops()
     }
 
@@ -372,12 +420,12 @@ final class AppModel: ObservableObject, PriceFeedSink {
         searchTask = nil
         searchRequestID = nil
         cancelRESTAndLoops()
-        feedController.suspendForSleep()
+        feedCoordinator.suspendForSleep()
     }
 
     func handleWake() {
         freshnessPulse.toggle()
-        feedController.resumeAfterWake()
+        feedCoordinator.resumeAfterWake()
         pollQuotes()
         refreshAllCharts()
         reconcilePeriodicLoops()
@@ -385,7 +433,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
 
     func shutdown() {
         cancelRESTAndLoops()
-        feedController.shutdown()
+        feedCoordinator.shutdown()
         let center = NSWorkspace.shared.notificationCenter
         workspaceObservers.forEach(center.removeObserver)
         workspaceObservers.removeAll()
@@ -477,7 +525,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
     }
 
     private func startNetworkWork() {
-        feedController.replaceProducts(binanceProductIDs(in: persistedState))
+        feedCoordinator.replaceProducts(productIDsByVenue(in: persistedState))
         guard !persistedState.items.isEmpty else { return }
         pollQuotes()
         refreshAllCharts()
@@ -733,11 +781,12 @@ final class AppModel: ObservableObject, PriceFeedSink {
         freshnessLoop?.cancel(); freshnessLoop = nil
     }
 
-    private func binanceProductIDs(in state: PersistedState) -> Set<String> {
-        Set(state.items.compactMap { item in
-            guard item.mapping?.exchange == .binance else { return nil }
-            return item.mapping?.productID
-        })
+    private func productIDsByVenue(in state: PersistedState) -> [Venue: Set<String>] {
+        var result: [Venue: Set<String>] = [:]
+        for mapping in state.items.compactMap(\.mapping) {
+            result[mapping.exchange, default: []].insert(mapping.productID)
+        }
+        return result
     }
 
     private func installSleepWakeObservers() {

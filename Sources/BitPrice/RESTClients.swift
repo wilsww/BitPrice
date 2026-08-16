@@ -681,7 +681,7 @@ struct CoinbasePriceSource: PriceSource {
 
 struct OKXPriceSource: PriceSource {
     let venue = Venue.okx
-    let liveness = SourceLiveness.polled(seconds: 30)
+    let liveness = SourceLiveness.push
     private let clients: RESTClients
 
     init(clients: RESTClients) {
@@ -693,7 +693,11 @@ struct OKXPriceSource: PriceSource {
     }
 
     func quote(productID: String) async throws -> SourceQuote {
-        try await clients.okxTicker(productID: productID)
+        throw NetworkFailure(
+            domain: venue.rawValue,
+            code: -5,
+            message: "OKX quotes arrive through its push feed"
+        )
     }
 
     func candles(
