@@ -37,9 +37,16 @@ private extension TextSizePreference {
         }
     }
 
+    /// Small is 750 rather than the 700 the even spacing would suggest.
+    ///
+    /// The heights grow by 40% from Small to Extra Large while the type does
+    /// not, so the smallest size is the tightest fit rather than the roomiest,
+    /// and Settings overflowed there — clipping its own header and the Quit row
+    /// once the scroll view was removed. Raising this one step is what makes
+    /// "the settings always fit" true rather than assumed.
     var panelHeight: CGFloat {
         switch self {
-        case .small: 700
+        case .small: 750
         case .medium: 780
         case .large: 880
         case .extraLarge: 980
@@ -607,160 +614,174 @@ private struct SettingsView: View {
     @State private var retainedCooldownCustom: AlertDefaultPickerOption?
     @State private var retainedHysteresisCustom: AlertDefaultPickerOption?
 
+    // No ScrollView. The settings are a fixed set of four cards, and the panel
+    // grows with the text size, so there is nothing here that can overflow at
+    // any size the app offers. Two attempts to scroll it conditionally both
+    // misjudged: wrapping unconditionally put a scrollbar on a screen that fits,
+    // and a ViewThatFits pair picked the scrolling branch at Medium while
+    // leaving Extra Large — the taller content — unscrolled, since the plain
+    // branch is measured carrying the enclosing infinite-height frame and so
+    // reports that it never fits. A trailing Spacer holds Quit at the bottom
+    // without either construct. If a future setting genuinely makes this
+    // overflow, add the ScrollView back deliberately rather than defensively.
     var body: some View {
-        GeometryReader { geometry in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ZStack {
-                        Text("Settings")
-                            .panelFont(.title2, weight: .bold)
-                        HStack {
-                            Button { close() } label: {
-                                Label("Back", systemImage: "chevron.left")
-                            }
-                            .panelFont(.headline)
-                            .buttonStyle(.borderless)
-                            Spacer()
-                        }
+        VStack(alignment: .leading, spacing: 12) {
+            ZStack {
+                Text("Settings")
+                    .panelFont(.title2, weight: .bold)
+                HStack {
+                    Button { close() } label: {
+                        Label("Back", systemImage: "chevron.left")
                     }
-                    .frame(maxWidth: .infinity)
-
-                    VStack(alignment: .leading, spacing: 18) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Launch at login")
-                                .panelFont(.headline, weight: .bold)
-                            Toggle("", isOn: launchAtLoginBinding)
-                                .panelFont(.headline)
-                                .toggleStyle(.switch)
-                                .labelsHidden()
-                                .accessibilityLabel("Launch BitPrice at login")
-                            if let statusMessage = loginItemStatus.statusMessage {
-                                Text(statusMessage)
-                                    .panelFont(.body)
-                                    .foregroundStyle(.orange)
-                            }
-                            Text("Start BitPrice automatically when you sign in.")
-                                .panelFont(.body)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Price alerts")
-                                .panelFont(.headline, weight: .bold)
-                            Toggle("", isOn: alertsBinding)
-                                .panelFont(.headline)
-                                .toggleStyle(.switch)
-                                .labelsHidden()
-                                .accessibilityLabel("Enable price alerts")
-                                .disabled(model.isReadOnly)
-                            Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
-                                .panelFont(.body)
-                                .foregroundStyle(.secondary)
-                            Text(notificationPermissionStatus.message)
-                                .panelFont(.body)
-                                .foregroundStyle(notificationPermissionStatus.isWarning ? Color.orange : Color.secondary)
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Alert defaults")
-                                .panelFont(.headline, weight: .bold)
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Cooldown")
-                                    .panelFont(.body)
-                                Picker("", selection: cooldownBinding) {
-                                    ForEach(AlertDefaultPickerOptions.options(
-                                        retainedCustom: retainedCooldownCustom,
-                                        standard: AlertDefaultPickerOptions.cooldown
-                                    ), id: \.self) { option in
-                                        Text(option.label).tag(NSDecimalNumber(decimal: option.value).intValue)
-                                    }
-                                }
-                                .pickerStyle(.segmented)
-                                .controlSize(.large)
-                                .labelsHidden()
-                                .panelFont(.body)
-                                .accessibilityLabel("Cooldown")
-                            }
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Hysteresis percent")
-                                    .panelFont(.body)
-                                Picker("", selection: hysteresisBinding) {
-                                    ForEach(AlertDefaultPickerOptions.options(
-                                        retainedCustom: retainedHysteresisCustom,
-                                        standard: AlertDefaultPickerOptions.hysteresis
-                                    ), id: \.self) { option in
-                                        Text(option.label).tag(option.value)
-                                    }
-                                }
-                                .pickerStyle(.segmented)
-                                .controlSize(.large)
-                                .labelsHidden()
-                                .panelFont(.body)
-                                .accessibilityLabel("Hysteresis percent")
-                            }
-                            Text("Changes seed new alerts only; existing alerts are unchanged.")
-                                .panelFont(.body)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Text size")
-                                .panelFont(.headline, weight: .bold)
-                            Picker("", selection: textSizeBinding) {
-                                ForEach(TextSizePreference.allCases, id: \.self) { preference in
-                                    Text(preference.displayName).tag(preference)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .controlSize(.large)
-                            .panelFont(.headline)
-                            .labelsHidden()
-                            .accessibilityLabel("Text size")
-                            Text("Scales text throughout the panel; the panel grows with it.")
-                                .panelFont(.body)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-                    }
-
-                    Spacer(minLength: 14)
-
-                    appIdentityBlock
-
-                    if let localError {
-                        Text(localError)
-                            .panelFont(.body)
-                            .foregroundStyle(.red)
-                    }
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text("Price updates and alerts stop while the app is closed.")
-                            .panelFont(.body)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 8)
-                        Button("Quit", role: .destructive) {
-                            NSApplication.shared.terminate(nil)
-                        }
-                        .panelFont(.headline)
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red)
-                    }
+                    .panelFont(.headline)
+                    .buttonStyle(.borderless)
+                    Spacer()
                 }
-                .frame(maxWidth: .infinity, minHeight: geometry.size.height, alignment: .topLeading)
+            }
+            .frame(maxWidth: .infinity)
+
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Launch at login")
+                        .panelFont(.headline, weight: .bold)
+                    Toggle("", isOn: launchAtLoginBinding)
+                        .panelFont(.headline)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .accessibilityLabel("Launch BitPrice at login")
+                    if let statusMessage = loginItemStatus.statusMessage {
+                        Text(statusMessage)
+                            .panelFont(.body)
+                            .foregroundStyle(.orange)
+                    }
+                    Text("Start BitPrice automatically when you sign in.")
+                        .panelFont(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Price alerts")
+                        .panelFont(.headline, weight: .bold)
+                    Toggle("", isOn: alertsBinding)
+                        .panelFont(.headline)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .accessibilityLabel("Enable price alerts")
+                        .disabled(model.isReadOnly)
+                    Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
+                        .panelFont(.body)
+                        .foregroundStyle(.secondary)
+                    Text(notificationPermissionStatus.message)
+                        .panelFont(.body)
+                        .foregroundStyle(notificationPermissionStatus.isWarning ? Color.orange : Color.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Alert defaults")
+                        .panelFont(.headline, weight: .bold)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Cooldown")
+                            .panelFont(.body)
+                        Picker("", selection: cooldownBinding) {
+                            ForEach(AlertDefaultPickerOptions.options(
+                                retainedCustom: retainedCooldownCustom,
+                                standard: AlertDefaultPickerOptions.cooldown
+                            ), id: \.self) { option in
+                                Text(option.label).tag(NSDecimalNumber(decimal: option.value).intValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .controlSize(.large)
+                        .labelsHidden()
+                        .panelFont(.body)
+                        .accessibilityLabel("Cooldown")
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Hysteresis percent")
+                            .panelFont(.body)
+                        Picker("", selection: hysteresisBinding) {
+                            ForEach(AlertDefaultPickerOptions.options(
+                                retainedCustom: retainedHysteresisCustom,
+                                standard: AlertDefaultPickerOptions.hysteresis
+                            ), id: \.self) { option in
+                                Text(option.label).tag(option.value)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .controlSize(.large)
+                        .labelsHidden()
+                        .panelFont(.body)
+                        .accessibilityLabel("Hysteresis percent")
+                    }
+                    Text("Changes seed new alerts only; existing alerts are unchanged.")
+                        .panelFont(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Text size")
+                        .panelFont(.headline, weight: .bold)
+                    Picker("", selection: textSizeBinding) {
+                        ForEach(TextSizePreference.allCases, id: \.self) { preference in
+                            Text(preference.displayName).tag(preference)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.large)
+                    .panelFont(.headline)
+                    .labelsHidden()
+                    .accessibilityLabel("Text size")
+                    Text("Scales text throughout the panel; the panel grows with it.")
+                        .panelFont(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            }
+
+            Spacer(minLength: 14)
+
+            appIdentityBlock
+
+            if let localError {
+                Text(localError)
+                    .panelFont(.body)
+                    .foregroundStyle(.red)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Price updates and alerts stop while the app is closed.")
+                    .panelFont(.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("Quit", role: .destructive) {
+                    NSApplication.shared.terminate(nil)
+                }
+                .panelFont(.headline)
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.onAppear {
+                    FileHandle.standardError.write(
+                        Data("MEASURE settings content height = \(proxy.size.height)\n".utf8)
+                    )
+                }
+            }
+        )
         .onAppear {
             refreshLoginItemStatus()
             refreshNotificationPermissionStatus()

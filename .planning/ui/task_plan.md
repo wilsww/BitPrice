@@ -66,8 +66,19 @@ appeared within minutes of the first real desktop launch.
   `20c` derives its version from `currentSchemaVersion + 1` rather than a
   literal, so bumping the schema cannot silently retire the test.
 
-  Still unseen: the read-only UI on a desktop. What add, delete, and settings
-  edits actually look like while `isReadOnly` is true has never been observed.
+  The read-only UI was walked through on a desktop 2026-08-16, by setting
+  `schemaVersion` to 99 in the real state file with everything else untouched.
+  That branch was chosen over malformed JSON because its message names the
+  version, so the screen itself identifies which of the four branches ran.
+  All four read-only behaviours are correct: add is disabled, delete and reorder
+  are disabled, the Settings controls are disabled, and a reset button exists.
+  An earlier reading of the source suggested there might be no way out of
+  recovery mode at all; that was wrong — `resetRecovery()` is wired to a button
+  in the banner area.
+
+  The walkthrough produced three defects, all in what the mode *says* rather
+  than what it does. They are recorded below under their own entry, since the
+  branch coverage above is unaffected by them.
 
 ### The panel background lets whatever is behind it bleed through
 Raised 2026-08-15. **Resolved in ui24.** The panel now applies `.regularMaterial`
@@ -82,6 +93,30 @@ bottom-right, sharing a line with the closing disclosure. No confirmation step
 was added: the misclick was caused by proximity to the gear, and moving the
 button removes that path rather than patching it. Quit kept its prominent red
 style — see `findings.md` for why that does not contradict the move.
+
+### The Settings screen scrolled when it had no need to
+Raised and resolved 2026-08-16. Settings showed a scrollbar at Medium, where
+everything already fits. Two attempts got it wrong before the third worked, and
+the wrong turns are the useful part of this entry:
+
+- **Unconditional `ScrollView`.** The content was pinned to `minHeight:
+  geometry.size.height` so the trailing `Spacer` could hold Quit at the bottom,
+  which left the scroll content exactly its own height — close enough, once the
+  scrollbar gutter and rounding are counted, to register as overflow.
+- **A `ViewThatFits` pair**, copied from the selected-detail region. It chose the
+  scrolling branch at Medium while leaving Extra Large — the *taller* content —
+  unscrolled. The plain branch is measured carrying the enclosing
+  `maxHeight: .infinity` frame, so it reports that it never fits, and Extra Large
+  escaping was luck rather than the mechanism working.
+
+The fix is no scroll construct at all plus one changed constant: **Small's panel
+is 750 rather than 700**. That is the real finding here. The panel heights grow
+40% from Small to Extra Large while the type does not, so the smallest size is
+the *tightest* fit rather than the roomiest. Removing the scroll view exposed
+that immediately — Small clipped its own header and the Quit row — which is why
+"the settings are a fixed set of cards and cannot overflow" was wrong as stated.
+Verified on the desktop at Small and Extra Large: no scrollbar, nothing clipped,
+Quit in place at both.
 
 ### Settings item order
 Raised 2026-08-15. **Resolved in ui24.** Ordered Launch at login, Price alerts,
@@ -149,6 +184,39 @@ ui28.** The two single-option radio groups became one combined market list.
 The sequencing dependency recorded here held: widening quote assets first turned
 that list into a real choice, so the ceremony resolved itself rather than needing
 its own simplification.
+
+### Recovery mode says the wrong things
+Raised 2026-08-16 by the desktop walkthrough recorded above. **Resolved and
+verified on the desktop the same day**, including a second walkthrough that
+confirmed the backup file now appears with all four coins intact — the same
+operation that silently destroyed them the first time. Three defects, in
+increasing order of how much they matter:
+
+- **The banner runs two sentences together.** `AppModel` composes it as
+  `"\(reason) Original file preserved at \(path)."`, which assumes each `reason`
+  ends in punctuation. None of the four do, so it reads `...than this app
+  supports Original file preserved at...`. The fix belongs in the composition,
+  not in the reason strings — `20c` asserts on the exact reason text.
+- **It explains the cause and not the consequence.** The banner states a
+  technical fact and stops. It never says the watchlist did not load, so the
+  single BTC row on screen looks like data rather than a stand-in. And
+  `Schema version 99` means nothing to a user whose actual situation is that
+  the file came from a newer BitPrice — most plausibly a downgrade.
+- **Reset destroys the file the banner promised was preserved.** The button sits
+  directly under a message saying the original is safe, and `resetRecovery()`
+  saves a fresh seed straight over it. Confirmed by hand: a four-coin watchlist
+  became a one-coin seed and the original bytes were gone. `Reset protected
+  file` also reads like a repair rather than a discard.
+
+The chosen fix copies the damaged file aside before overwriting, under a fixed
+filename so each reset replaces the previous copy rather than accumulating —
+the alternative of timestamped copies was rejected because deleting the user's
+data is exactly the code worth not writing. A copy failure must abort the reset:
+the read-failure branch means the file can genuinely be unreadable, and
+discarding someone's only copy because the backup step failed is worse than
+refusing to reset. No confirmation dialog: a `MenuBarExtra` panel dismisses when
+a separate presentation takes key status, which is why every editor here is an
+inline route.
 
 ### Market list layout
 Raised and **resolved 2026-08-16**. Each candidate row read
