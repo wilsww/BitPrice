@@ -486,7 +486,7 @@ frames, and the 6H candles were fetched directly. See the OKX paragraph in the
 survey above for both. What remains is the work, not the question of whether it
 can be done.
 
-#### Step 2a — OKX as a polling source. Half a day, additive.
+#### Step 2a — OKX as a polling source. Landed 2026-08-16, awaiting desktop test.
 
 Everything except the push feed. OKX has a full REST ticker, so it can ship as
 a polled source — the way Coinbase runs today — and still be a usable venue:
@@ -556,8 +556,58 @@ that owns several feeds, leaving each venue's identity checking inside its own
 implementation. That is a rewrite of the connection layer. The existing feed
 tests all name `BinanceFeedController` concretely and will move with it.
 
-If 2b is never done, OKX stays on a 60-second poll and says so in the UI. That
+If 2b is never done, OKX stays on a 30-second poll and says so in the UI. That
 is a real product state, not a broken one.
+
+---
+
+**2a landed 2026-08-16** in "feat: add OKX as a third price source, polling every
+30 seconds", delegated and then verified rather than taken on report. The test
+count went from 51 to 55. `bash scripts/build-app.sh` is clean and the installed
+app in `~/Applications` was synced to the new binary, hash-compared.
+
+It was additive as predicted: `DomainModels.swift` gained one enum case and one
+computed property, `RESTClients.swift` gained the OKX types, three fetchers, a
+pacer and the `PriceSource` conformance, and no existing call site outside
+`configuredPriceSources` was edited. `BinanceFeedController` was not touched.
+
+*The endpoint shapes were fetched live before the task was written*, which is
+what caught three differences that documentation alone would not have made
+obvious and that a plausible implementation would get wrong:
+
+- `history-candles` returns rows **newest-first**, opposite to both existing
+  venues. Passing them through `normalizedCandles` sorts them; adding a reversal
+  on top would have un-sorted them.
+- Its timestamps are **milliseconds**, like Binance and unlike Coinbase's
+  seconds. A mix-up puts every point in 1970 and draws an empty chart.
+- OKX reports failure as a **non-zero `code` string inside an HTTP 200 body**, so
+  `requireSuccess` alone would accept an error response as market data.
+
+Each is now pinned by a test that also asserts the request path and query items,
+so a wrong endpoint or bar string fails rather than silently returning nothing.
+
+**One defect was found, and Codex reported it against its own work.** The task
+said the UI needed no edits because step one made the disclosures derive from
+`liveness`. That was true, but the venue *name* in those sentences came from
+`venue.rawValue.capitalized`, which renders `okx` as **"Okx"** — in five places:
+the market picker, the chart caption, both polling disclosures, and the
+duplicate-market validation error. Codex left it alone as out of scope and said
+so plainly instead of quietly fixing or quietly ignoring it. Fixed separately in
+"fix: spell OKX the way OKX spells it" by giving `Venue` an explicit
+`displayName`, so a fourth venue must state its own spelling rather than inherit
+a rule that only happened to fit the first two. Test 22h pins it; both 22h and
+22g fail if a name regresses, verified by mutation.
+
+**Not yet verified on the desktop.** The live `watchlist.json` was backed up to
+`watchlist.json.pre-okx` (sha256 `be82cd8f…`) with a hash-verified restore
+script that was run once to prove it works, not merely written. This matters
+because adding `Venue.okx` is one-way for user data even without a schema bump:
+a file containing `"okx"` cannot be decoded by a build predating the case.
+
+What the desktop test needs to show: an OKX market appears when adding a coin
+and is spelled "OKX", selecting it produces a live price and a drawn chart at
+all three ranges, the alert editor says OKX polls every 30 seconds, and the four
+existing Binance items are untouched.
 
 **Why they must be separate.** Each split isolates one class of failure.
 Combined, step one and step two leave a failing test unable to distinguish a
