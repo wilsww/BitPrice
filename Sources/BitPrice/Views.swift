@@ -132,6 +132,46 @@ private extension View {
     }
 }
 
+@MainActor
+private func panelHeader<Leading: View>(
+    title: String,
+    @ViewBuilder leading: () -> Leading
+) -> some View {
+    ZStack {
+        Text(title)
+            .panelFont(.title2, weight: .bold)
+        HStack {
+            leading()
+                .panelFont(.headline)
+                .buttonStyle(.borderless)
+            Spacer()
+        }
+    }
+    .frame(maxWidth: .infinity)
+}
+
+@MainActor
+private func panelCard<Content: View>(
+    @ViewBuilder content: () -> Content
+) -> some View {
+    content()
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+}
+
+@MainActor
+private func panelActionBar<Content: View>(
+    alignment: VerticalAlignment = .center,
+    controlSize: ControlSize = .large,
+    @ViewBuilder content: () -> Content
+) -> some View {
+    HStack(alignment: alignment, spacing: 12) {
+        content()
+    }
+    .controlSize(controlSize)
+}
+
 private enum LoginItemStatus: Equatable, Sendable {
     case enabled
     case notRegistered
@@ -626,127 +666,115 @@ private struct SettingsView: View {
     // overflow, add the ScrollView back deliberately rather than defensively.
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ZStack {
-                Text("Settings")
-                    .panelFont(.title2, weight: .bold)
-                HStack {
-                    Button { close() } label: {
-                        Label("Back", systemImage: "chevron.left")
-                    }
-                    .panelFont(.headline)
-                    .buttonStyle(.borderless)
-                    Spacer()
+            panelHeader(title: "Settings") {
+                Button { close() } label: {
+                    Label("Back", systemImage: "chevron.left")
                 }
             }
-            .frame(maxWidth: .infinity)
 
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Launch at login")
-                        .panelFont(.headline, weight: .bold)
-                    Toggle("", isOn: launchAtLoginBinding)
-                        .panelFont(.headline)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .accessibilityLabel("Launch BitPrice at login")
-                    if let statusMessage = loginItemStatus.statusMessage {
-                        Text(statusMessage)
-                            .panelFont(.body)
-                            .foregroundStyle(.orange)
-                    }
-                    Text("Start BitPrice automatically when you sign in.")
-                        .panelFont(.body)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Price alerts")
-                        .panelFont(.headline, weight: .bold)
-                    Toggle("", isOn: alertsBinding)
-                        .panelFont(.headline)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .accessibilityLabel("Enable price alerts")
-                        .disabled(model.isReadOnly)
-                    Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
-                        .panelFont(.body)
-                        .foregroundStyle(.secondary)
-                    Text(notificationPermissionStatus.message)
-                        .panelFont(.body)
-                        .foregroundStyle(notificationPermissionStatus.isWarning ? Color.orange : Color.secondary)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Alert defaults")
-                        .panelFont(.headline, weight: .bold)
+                panelCard {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Cooldown")
+                        Text("Launch at login")
+                            .panelFont(.headline, weight: .bold)
+                        Toggle("", isOn: launchAtLoginBinding)
+                            .panelFont(.headline)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .accessibilityLabel("Launch BitPrice at login")
+                        if let statusMessage = loginItemStatus.statusMessage {
+                            Text(statusMessage)
+                                .panelFont(.body)
+                                .foregroundStyle(.orange)
+                        }
+                        Text("Start BitPrice automatically when you sign in.")
                             .panelFont(.body)
-                        Picker("", selection: cooldownBinding) {
-                            ForEach(AlertDefaultPickerOptions.options(
-                                retainedCustom: retainedCooldownCustom,
-                                standard: AlertDefaultPickerOptions.cooldown
-                            ), id: \.self) { option in
-                                Text(option.label).tag(NSDecimalNumber(decimal: option.value).intValue)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                panelCard {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Price alerts")
+                            .panelFont(.headline, weight: .bold)
+                        Toggle("", isOn: alertsBinding)
+                            .panelFont(.headline)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .accessibilityLabel("Enable price alerts")
+                            .disabled(model.isReadOnly)
+                        Text("Turning alerts back on can fire immediately for a coin already past its threshold.")
+                            .panelFont(.body)
+                            .foregroundStyle(.secondary)
+                        Text(notificationPermissionStatus.message)
+                            .panelFont(.body)
+                            .foregroundStyle(notificationPermissionStatus.isWarning ? Color.orange : Color.secondary)
+                    }
+                }
+
+                panelCard {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Alert defaults")
+                            .panelFont(.headline, weight: .bold)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Cooldown")
+                                .panelFont(.body)
+                            Picker("", selection: cooldownBinding) {
+                                ForEach(AlertDefaultPickerOptions.options(
+                                    retainedCustom: retainedCooldownCustom,
+                                    standard: AlertDefaultPickerOptions.cooldown
+                                ), id: \.self) { option in
+                                    Text(option.label).tag(NSDecimalNumber(decimal: option.value).intValue)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .controlSize(.large)
+                            .labelsHidden()
+                            .panelFont(.body)
+                            .accessibilityLabel("Cooldown")
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Hysteresis percent")
+                                .panelFont(.body)
+                            Picker("", selection: hysteresisBinding) {
+                                ForEach(AlertDefaultPickerOptions.options(
+                                    retainedCustom: retainedHysteresisCustom,
+                                    standard: AlertDefaultPickerOptions.hysteresis
+                                ), id: \.self) { option in
+                                    Text(option.label).tag(option.value)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .controlSize(.large)
+                            .labelsHidden()
+                            .panelFont(.body)
+                            .accessibilityLabel("Hysteresis percent")
+                        }
+                        Text("Changes seed new alerts only; existing alerts are unchanged.")
+                            .panelFont(.body)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                panelCard {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Text size")
+                            .panelFont(.headline, weight: .bold)
+                        Picker("", selection: textSizeBinding) {
+                            ForEach(TextSizePreference.allCases, id: \.self) { preference in
+                                Text(preference.displayName).tag(preference)
                             }
                         }
                         .pickerStyle(.segmented)
                         .controlSize(.large)
+                        .panelFont(.headline)
                         .labelsHidden()
-                        .panelFont(.body)
-                        .accessibilityLabel("Cooldown")
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Hysteresis percent")
+                        .accessibilityLabel("Text size")
+                        Text("Scales text throughout the panel; the panel grows with it.")
                             .panelFont(.body)
-                        Picker("", selection: hysteresisBinding) {
-                            ForEach(AlertDefaultPickerOptions.options(
-                                retainedCustom: retainedHysteresisCustom,
-                                standard: AlertDefaultPickerOptions.hysteresis
-                            ), id: \.self) { option in
-                                Text(option.label).tag(option.value)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .controlSize(.large)
-                        .labelsHidden()
-                        .panelFont(.body)
-                        .accessibilityLabel("Hysteresis percent")
+                            .foregroundStyle(.secondary)
                     }
-                    Text("Changes seed new alerts only; existing alerts are unchanged.")
-                        .panelFont(.body)
-                        .foregroundStyle(.secondary)
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Text size")
-                        .panelFont(.headline, weight: .bold)
-                    Picker("", selection: textSizeBinding) {
-                        ForEach(TextSizePreference.allCases, id: \.self) { preference in
-                            Text(preference.displayName).tag(preference)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .controlSize(.large)
-                    .panelFont(.headline)
-                    .labelsHidden()
-                    .accessibilityLabel("Text size")
-                    Text("Scales text throughout the panel; the panel grows with it.")
-                        .panelFont(.body)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             }
 
             Spacer(minLength: 14)
@@ -758,18 +786,18 @@ private struct SettingsView: View {
                     .panelFont(.body)
                     .foregroundStyle(.red)
             }
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Price updates and alerts stop while the app is closed.")
-                    .panelFont(.body)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
+            panelActionBar(alignment: .firstTextBaseline, controlSize: .regular) {
                 Button("Quit", role: .destructive) {
                     NSApplication.shared.terminate(nil)
                 }
                 .panelFont(.headline)
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
+                Spacer(minLength: 8)
+                Text("Price updates and alerts stop while the app is closed.")
+                    .panelFont(.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1518,17 +1546,11 @@ private struct AddCoinView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                Text(project == nil ? "Add coin" : "Confirm markets")
-                    .panelFont(.title2, weight: .bold)
-                HStack {
-                    Button("Cancel", action: close)
-                        .panelFont(.headline)
-                        .buttonStyle(.borderless)
-                    Spacer()
+            panelHeader(title: project == nil ? "Add coin" : "Confirm markets") {
+                Button { close() } label: {
+                    Label("Back", systemImage: "chevron.left")
                 }
             }
-            .frame(maxWidth: .infinity)
             if let project {
                 confirmation(project)
             } else {
@@ -1571,16 +1593,15 @@ private struct AddCoinView: View {
     @ViewBuilder
     private func confirmation(_ result: SearchResult) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(result.symbol)
-                    .panelFont(.title2, weight: .bold)
-                Text("\(result.name) · \(result.id)")
-                    .panelFont(.headline)
-                    .foregroundStyle(.secondary)
+            panelCard {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(result.symbol)
+                        .panelFont(.title2, weight: .bold)
+                    Text("\(result.name) · \(result.id)")
+                        .panelFont(.headline)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
 
             if loadingCandidates {
                 ProgressView()
@@ -1623,19 +1644,6 @@ private struct AddCoinView: View {
                         .panelFont(.body)
                         .foregroundStyle(.secondary)
                 }
-                HStack(spacing: 12) {
-                    Button("Back") { project = nil }
-                        .panelFont(.headline)
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
-                    Button("Add") { confirm(result) }
-                        .panelFont(.headline)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .disabled(!canAdd)
-                    Spacer(minLength: 0)
-                }
-                .padding(.top, 4)
                 Label(
                     "Ticker matches are string guesses, not verified identities. A wrong choice can show a plausible-looking wrong price.",
                     systemImage: "exclamationmark.triangle.fill"
@@ -1645,6 +1653,17 @@ private struct AddCoinView: View {
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                panelActionBar {
+                    Button("Back") { project = nil }
+                        .panelFont(.headline)
+                        .buttonStyle(.bordered)
+                    Spacer(minLength: 0)
+                    Button("Add") { confirm(result) }
+                        .panelFont(.headline)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canAdd)
+                }
+                .padding(.top, 4)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1659,19 +1678,18 @@ private struct AddCoinView: View {
         candidates: [VenueCandidate],
         selection: Binding<String?>
     ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(candidates) { candidate in
-                candidateRow(
-                    pair: "\(candidate.baseAsset)/\(candidate.quoteAsset)",
-                    venue: candidate.venue.displayName,
-                    value: candidate.id,
-                    selection: selection
-                )
+        panelCard {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(candidates) { candidate in
+                    candidateRow(
+                        pair: "\(candidate.baseAsset)/\(candidate.quoteAsset)",
+                        venue: candidate.venue.displayName,
+                        value: candidate.id,
+                        selection: selection
+                    )
+                }
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var canAdd: Bool {
@@ -1790,47 +1808,71 @@ private struct AlertEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Alert · \(item.symbol)").panelFont(.title2, weight: .bold)
-                Spacer()
-                Button("Cancel", action: close)
+            panelHeader(title: "Alert · \(item.symbol)") {
+                Button { close() } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
             }
-            Toggle("Enabled", isOn: $enabled)
-            if !model.alertsEnabled {
-                Text("Alerts are globally off. This alert will not fire until they are re-enabled.")
-                    .panelFont(.body)
-                    .foregroundStyle(.orange)
+
+            panelCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Enabled", isOn: $enabled)
+                    if !model.alertsEnabled {
+                        Text("Alerts are globally off. This alert will not fire until they are re-enabled.")
+                            .panelFont(.body)
+                            .foregroundStyle(.orange)
+                    }
+                    // Segmented style renders inline; a menu-style Picker would take key
+                    // status from the MenuBarExtra window and dismiss the panel.
+                    Picker("Direction", selection: $direction) {
+                        Text("Above").tag(AlertDirection.above)
+                        Text("Below").tag(AlertDirection.below)
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.large)
+                }
             }
-            // Segmented style renders inline; a menu-style Picker would take key
-            // status from the MenuBarExtra window and dismiss the panel.
-            Picker("Direction", selection: $direction) {
-                Text("Above").tag(AlertDirection.above)
-                Text("Below").tag(AlertDirection.below)
+
+            panelCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledContent("Threshold") { TextField("", text: $threshold).textFieldStyle(.roundedBorder) }
+                    LabeledContent("Cooldown seconds") { TextField("", text: $cooldown).textFieldStyle(.roundedBorder) }
+                    LabeledContent("Hysteresis percent") { TextField("", text: $hysteresis).textFieldStyle(.roundedBorder) }
+                    rearmExplanation
+                }
             }
-            .pickerStyle(.segmented)
-            .controlSize(.large)
-            LabeledContent("Threshold") { TextField("", text: $threshold).textFieldStyle(.roundedBorder) }
-            LabeledContent("Cooldown seconds") { TextField("", text: $cooldown).textFieldStyle(.roundedBorder) }
-            LabeledContent("Hysteresis percent") { TextField("", text: $hysteresis).textFieldStyle(.roundedBorder) }
-            rearmExplanation
-            if let alert = item.alert, alert.isEnabled, !alert.isArmed {
-                Text("Currently disarmed — it already fired and is waiting for the re-arm price above.")
-                    .panelFont(.body).foregroundStyle(.orange)
+
+            // The three disclosures each carry their own condition, and the card
+            // is drawn whenever any of them is. A single precomputed "should this
+            // card exist" flag was tried and removed: it restated all three
+            // conditions in a second place, so changing one of them here and not
+            // there would either blank the card or hide the message inside it.
+            // An empty card in the rare all-false case is the cheaper failure.
+            panelCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let alert = item.alert, alert.isEnabled, !alert.isArmed {
+                        Text("Currently disarmed — it already fired and is waiting for the re-arm price above.")
+                            .panelFont(.body).foregroundStyle(.orange)
+                    }
+                    if let venue = item.mapping?.exchange,
+                       case .polled(let seconds) = model.sourceLiveness(for: venue) {
+                        Text("\(venue.displayName) polls every \(seconds) seconds and can miss a brief breach.")
+                            .panelFont(.body).foregroundStyle(.secondary)
+                    }
+                    if let localError { Text(localError).panelFont(.body).foregroundStyle(.red) }
+                }
             }
-            if let venue = item.mapping?.exchange,
-               case .polled(let seconds) = model.sourceLiveness(for: venue) {
-                Text("\(venue.displayName) polls every \(seconds) seconds and can miss a brief breach.")
-                    .panelFont(.body).foregroundStyle(.secondary)
-            }
-            if let localError { Text(localError).panelFont(.body).foregroundStyle(.red) }
             Spacer()
-            HStack {
-                Button("Remove alert") { remove() }
+            panelActionBar {
+                Button("Remove alert", role: .destructive) { remove() }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
                 Spacer()
                 // No .defaultAction: the editor is replaced by the list view on
                 // save, and the same key event would then reach whatever became
                 // the default control there.
                 Button("Save") { save() }
+                    .buttonStyle(.borderedProminent)
             }
         }
         .panelFont(.headline)
