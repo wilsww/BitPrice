@@ -627,10 +627,52 @@ aggregate to be live, so mixed-liveness aggregation is confirmed rather than
 assumed. No backup was needed for this step — unlike 2a, it changes no
 persisted data.
 
-**2b-2 — extract the protocol and add the OKX feed. One day.** A `PriceFeed`
-protocol and a coordinator owning several feeds, plus an `OKXFeed` that connects
-first and then sends `{"op":"subscribe",…}`. By then the multi-feed state model
-is already correct and verified, so a failure here means the connection layer.
+**2b-2 — extract the protocol and add the OKX feed. Landed 2026-08-16, awaiting
+desktop test.** A `PriceFeed` protocol and a coordinator owning several feeds,
+plus an `OKXFeed` that connects first and then sends `{"op":"subscribe",…}`. By
+then the multi-feed state model is already correct and verified, so a failure
+here means the connection layer. Test count 57 to 64; build clean.
+
+*The Binance state machine came through byte-identical.* Its only diff is
+protocol conformance, a `venue` property, and constructing the now venue-neutral
+adapter — the connection, identity, lease and backoff bodies are untouched, and
+tests 09 through 14 needed no edits at all. That was the thing most worth
+protecting and it was protected.
+
+**The duplication was a deliberate choice and should not be tidied away later.**
+`OKXFeed` mirrors the Binance lifecycle rather than sharing it: each feed owns
+its own three-way identity registry, lease task, retry task and client-wide
+failure counter. Sharing that machinery would have meant one venue's outage
+could reach the other's state through common mutable storage, which is the exact
+class of bug 2b-1 was done to prevent. The cost is real — two lifecycle
+implementations that can drift — and it is the right trade while only one of
+them has verified real-world behaviour. Anyone consolidating them later needs
+tests 14e and 14g to stay green.
+
+Where OKX genuinely differs from Binance: it connects to a bare endpoint and
+sends one batched subscribe frame, reports `.connected` only once that send
+succeeds, treats subscription acknowledgements as non-price frames, and enters
+its own backoff on an error frame or a send failure. `WebSocketTaskTransport`
+gained a `send` method, which Binance never needed because it names its streams
+in the URL. The 300-second lease rotation doubles as OKX's keepalive, so no ping
+mechanism was added.
+
+*Two mutation checks; one found a gap.* Making the coordinator relabel every
+state under every venue — the one place a venue's lifecycle could be attributed
+to all of them — left all 63 tests green. Test 14e proves the *feeds* keep
+separate state but says nothing about what the coordinator forwards. Test 14g
+now covers that seam. Deleting the event-frame filter correctly failed 14c. Two
+further mutations were rejected by the compiler rather than by tests, which is
+its own kind of evidence: the `catch` around the subscribe send is unreachable
+without the send, so the send cannot be silently dropped.
+
+**Not yet verified on the desktop.** `watchlist.json` was backed up to
+`watchlist.json.pre-okx-push` (sha256 `0cc7e99d…`). No schema or persistence
+change this time, so the backup is precaution rather than necessity.
+
+What the desktop test needs to show: the BTC/USD row on OKX updates without
+waiting 30 seconds, the alert editor no longer says OKX polls, the four Binance
+rows are unaffected, and the header still reads live.
 
 Keeping them apart matters more here than it did for 2a. Step 3 touches the
 three-way identity checking (`configurationID`, `connectionID`,
