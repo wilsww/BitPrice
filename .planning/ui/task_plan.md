@@ -363,10 +363,12 @@ What it does not clear is the coverage bar. OKX adds **9** liquid base assets
 over the current pair — `DOS`, `OKB`, `AEON`, `USDG`, `BASED`, `PI`, `CORE`,
 `SLX`, `CC` — and does **not** carry XMR, the one recognisable coin the whole
 survey turned up. Its 247 overlapping assets mean it mostly offers a second
-market for coins already reachable, not access to coins that are not. That is a
-real product argument if the goal is for a major venue to appear in the picker,
-but it is not a coverage argument, and the two should not be confused when
-someone revisits this.
+market for coins already reachable, not access to coins that are not.
+
+That is a coverage finding, and it did not decide the matter: OKX is scheduled
+as step two of the entry below. Recorded so the two arguments stay separable —
+wanting a major venue in the picker is a product judgement, and this paragraph
+is the measurement that judgement should be made against, not a veto over it.
 
 *The aggregator question, which the repo survey raised and the API survey
 answered.* Aggregators are popular in that sample because most of those apps
@@ -392,10 +394,19 @@ both carry it, and of those two only KuCoin passes the 6h candle gate.
 
 ### Make the price source a replaceable part
 Raised 2026-08-16, out of the price-source survey above. **Two steps, and they
-must not be combined** — see the last paragraph for why. **Step one is done and
-was verified on the desktop 2026-08-16**; see the closing section of this entry.
-Step two remains unstarted, and the survey above concluded there is currently no
-venue worth adding.
+must not be combined** — see the last paragraph for why.
+
+**Step one is done and was verified on the desktop 2026-08-16**; see the closing
+section of this entry. **Step two — adding OKX — is outstanding and is the
+second half of an agreed plan, not an open question.** It was split from step
+one on purpose so that a failing test could not be ambiguous between the two;
+the split was a sequencing decision, not a decision to drop the second half.
+
+The survey earlier in this file argues OKX does not pay for itself on coverage,
+and that argument stands as written. It is an input to the decision, not the
+decision: the reason to add a large venue can be that users expect to see it in
+the picker, which is a product judgement rather than a measurement. The
+measurement is recorded above so that judgement can be made with it in view.
 
 The survey concluded that no third venue earns its keep on coverage. A separate
 question came out of estimating the work: adding *any* venue is more expensive
@@ -461,12 +472,11 @@ carry the schema migration. Behaviour must not change: the same two venues, the
 same UI, the same disclosures. The existing 50 tests are the regression net for
 exactly this kind of pure structural change.
 
-**Step two — add a venue, if one is ever wanted.** With step one landed this is
-a new file implementing one protocol, estimated at half a day to a day, rather
-than a change threaded through five layers.
+**Step two — add OKX. Outstanding.** With step one landed this is a new file
+implementing one protocol plus the feed work described below, rather than a
+change threaded through five layers.
 
-**What step two would actually cost, using OKX as the worked example**, since
-that is the venue most likely to be asked for. The candidate, quote and candle
+**What step two costs.** The candidate, quote and candle
 paths are now a single `PriceSource` conformance and are close to mechanical.
 The cost that does not go away is the feed: OKX pushes over WebSocket, and
 `BinanceFeedController` was deliberately left Binance-specific in step one. Its
@@ -476,8 +486,13 @@ not, since Binance names its stream in the URL and wraps frames in
 `stream`/`data` while OKX sends `{"op":"subscribe",...}` after connecting and
 returns `{"arg":…,"data":[…]}`. Extracting that seam is the real work. A venue
 that only polls would skip it entirely and land near the half-day estimate.
-None of this is a reason to add OKX; it is what the bill looks like if the
-coverage argument is ever outweighed by a product one.
+Estimate for OKX including the feed seam: one to two days.
+
+Its technical feasibility is already established rather than assumed — the
+WebSocket was connected to from a development machine and pushed live ticker
+frames, and the 6H candles were fetched directly. See the OKX paragraph in the
+survey above for both. What remains is the work, not the question of whether it
+can be done.
 
 **Why they must be separate.** Combined, a failing test cannot distinguish a
 restructuring mistake from a mis-wired new venue. Separated, step one has a
