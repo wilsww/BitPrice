@@ -127,6 +127,25 @@ The sequencing dependency recorded here held: widening quote assets first turned
 that list into a real choice, so the ceremony resolved itself rather than needing
 its own simplification.
 
+### Market list layout
+Raised and **resolved 2026-08-16**. Each candidate row read
+`Binance · BTCUSDT (BTC/USDT)`, whose last two segments were one fact written
+twice. The row now leads with `BTC/USDT` and trails the venue in secondary
+colour; the product ID is gone, since it is the string sent to the venue's API
+rather than something a user checks a choice against. Verified on the desktop.
+Near-miss tickers are not made harder to spot — `BTC/USD1` separates itself from
+`BTC/USD` more clearly than `BTCUSD1` did, because the slash marks where the
+quote asset begins.
+
+### A dropped feed has never been seen
+Deferred 2026-08-16 as not worth chasing. The offline row treatment from ui26
+and ui27 — the dimmed row, the change losing its up/down colour, the Alert
+button saying alerts cannot fire, and a Coinbase-only row reaching live from
+polled quotes — has never been observed, because the feed does not drop in
+normal use. Recorded rather than deleted: this is the exact shape of untested
+path that has already produced defects in this project, so it stays visible for
+whoever next has a reason to force a disconnection.
+
 ### Look for other price sources
 Raised 2026-08-16. Not yet evaluated.
 
@@ -168,9 +187,36 @@ should measure.
 
 ### Chart time range
 The chart is fixed to 24 hours. Evaluated 2026-08-15; decisions below.
-Implemented in ui22 — the selector, `ChartRange`, persistence, and range-aware
-axis labels are done; desktop verification of live fetches at each range is
-still outstanding.
+Implemented in ui22 and **verified on the desktop 2026-08-16** against the live
+Binance API: 24h and 30d both fetch and draw, the range selector switches
+between them, the X axis formats by range (clock times at 24h, `7/18`-style
+dates at 30d), and the disclosure line reports the selected range. The 15m/6h/1d
+granularities are therefore exercised in practice, not only in the pure
+normalization tests.
+
+The two ranges showing different price bands looked wrong at first and is not.
+Checked 2026-08-16 by fetching both intervals directly from
+`api.binance.com/api/v3/klines` with the exact parameters the app sends. The
+live data reproduces the screenshots exactly: 24h spans 62,935.72–63,168.17 with
+a first close of 63,154.00, and 30d spans 62,823.64–66,556.16 with a first close
+of 64,834.22.
+
+The apparent contradiction came from misreading the axis. A range's axis covers
+that range's own minimum and maximum, so 30d covering 62,824–66,556 comfortably
+contains the 24h band rather than sitting above it, and the dashed line on the
+30d chart is the baseline — the close from thirty days ago — not the current
+price. What must agree between the two is the **last** close, and it does:
+63,121.92 in both.
+
+Two facts worth keeping, since neither is obvious from the code:
+
+- The 30d chart's final bucket is stamped 08:00 local while 24h's is 10:45.
+  Binance daily candles open at UTC 00:00, so the final one is the day still in
+  progress and its close is the current price. That is why the two ranges end on
+  the same number.
+- `ChartRange.candleCount` is 31 for 30d but Binance returns 30, because
+  `startTime` lands mid-day thirty days back and the partial candle before it is
+  not counted. `limit` is a ceiling rather than a quota, so this affects nothing.
 
 #### Chart time range evaluation (2026-08-15)
 
