@@ -349,6 +349,25 @@ which is outside this app's scope, and one depends on an unofficial scraper
 host. Nothing in the sample suggests a fourth technical requirement the criteria
 above missed.
 
+*OKX specifically, since being a large exchange is the obvious reason to ask.*
+It was evaluated on its own after the table above, because name recognition is a
+fair reason to revisit a number. Everything technical passes. Its public
+WebSocket was connected to from this machine and pushed live ticker frames
+carrying `last` and `open24h`, which is exactly the pair the row needs to show a
+price and a change; `/api/v5/market/candles?bar=6H` was requested directly and
+returned data, so it clears the granularity gate that Kraken fails; and its
+`instruments` catalogue exposes `baseCcy`/`quoteCcy` for the add flow. No API
+key, no payment.
+
+What it does not clear is the coverage bar. OKX adds **9** liquid base assets
+over the current pair — `DOS`, `OKB`, `AEON`, `USDG`, `BASED`, `PI`, `CORE`,
+`SLX`, `CC` — and does **not** carry XMR, the one recognisable coin the whole
+survey turned up. Its 247 overlapping assets mean it mostly offers a second
+market for coins already reachable, not access to coins that are not. That is a
+real product argument if the goal is for a major venue to appear in the picker,
+but it is not a coverage argument, and the two should not be confused when
+someone revisits this.
+
 *The aggregator question, which the repo survey raised and the API survey
 answered.* Aggregators are popular in that sample because most of those apps
 only need a number, not a chart. This app needs candles, and that is where
@@ -445,6 +464,20 @@ exactly this kind of pure structural change.
 **Step two — add a venue, if one is ever wanted.** With step one landed this is
 a new file implementing one protocol, estimated at half a day to a day, rather
 than a change threaded through five layers.
+
+**What step two would actually cost, using OKX as the worked example**, since
+that is the venue most likely to be asked for. The candidate, quote and candle
+paths are now a single `PriceSource` conformance and are close to mechanical.
+The cost that does not go away is the feed: OKX pushes over WebSocket, and
+`BinanceFeedController` was deliberately left Binance-specific in step one. Its
+290 lines of connection lifecycle — sleep/wake, lease rotation, failure
+backoff — are venue-neutral and worth sharing, but subscription and parsing are
+not, since Binance names its stream in the URL and wraps frames in
+`stream`/`data` while OKX sends `{"op":"subscribe",...}` after connecting and
+returns `{"arg":…,"data":[…]}`. Extracting that seam is the real work. A venue
+that only polls would skip it entirely and land near the half-day estimate.
+None of this is a reason to add OKX; it is what the bill looks like if the
+coverage argument is ever outweighed by a product one.
 
 **Why they must be separate.** Combined, a failing test cannot distinguish a
 restructuring mistake from a mis-wired new venue. Separated, step one has a
