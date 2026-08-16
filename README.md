@@ -2,7 +2,7 @@
 
 A macOS menu bar app that shows one cryptocurrency price in the menu bar and the rest of your watchlist in a panel behind it.
 
-<!-- screenshot: menu bar label next to the open panel -->
+![The BitPrice panel: a watchlist with the selected coin's chart below it](docs/images/panel-overview.jpg)
 
 Prices arrive over live WebSocket feeds from Binance and OKX, and over a 60-second poll from Coinbase. You pick the exact market for each coin — there is no automatic ticker matching, because ticker symbols are not unique. Price alerts fire as macOS notifications while the app is running.
 
@@ -33,7 +33,9 @@ Click the menu bar label to open the panel. Click anywhere else to dismiss it.
 
 Only one copy runs at a time.
 
-<!-- screenshot: the menu bar label -->
+![The menu bar label showing BTC and its price](docs/images/menu-bar-label.jpg)
+
+Next to the app's name in the panel header is a status word: **live**, **stale**, or **offline**, summarising the health of the feeds behind your watchlist.
 
 ### Adding a coin
 
@@ -43,13 +45,13 @@ Press the **+** button in the panel header.
 2. **Pick the market.** This is the step that matters. Selecting a search result identifies the *project*, not the market — several unrelated coins can share one ticker, and wrapped or bridged assets share tickers with the originals. So the app shows every candidate market it found across Binance, Coinbase, and OKX, and you choose exactly one.
 3. Press **Add**.
 
-The market you choose is that coin's only price source. The confirmation screen says so directly: if that feed stops, the row stops updating and its alerts cannot fire. Choosing a Coinbase market also warns you that a 60-second poll can miss a brief alert breach that a live feed would have caught.
+The market you choose is that coin's only price source. The confirmation screen says so directly: if that feed stops, the row stops updating and its alerts cannot fire. It also warns that ticker matches are string guesses rather than verified identities, so a wrong choice can show a plausible-looking wrong price. Choosing a Coinbase market adds that a 60-second poll can miss a brief alert breach a live feed would have caught.
 
-Quote assets are not restricted to USDT — any quote asset the venue lists is legal, so a market like `BTC-EUR` is available if the venue offers it.
+Quote assets are not restricted to USDT. The candidate list carries every quote the venues offer for that ticker — USD, USDT, USDC, FDUSD, and national currencies such as EUR, AUD, BRL, and ARS — each labelled with the venue supplying it.
 
 The watchlist holds up to 25 coins. The first launch seeds Bitcoin.
 
-<!-- screenshot: the market confirmation screen -->
+![The Confirm markets screen listing candidate markets by venue](docs/images/market-confirmation.jpg)
 
 ### Choosing what shows in the menu bar
 
@@ -63,15 +65,15 @@ Deleting the primary promotes the first remaining coin.
 
 ### Reading a row
 
-A row shows the coin's symbol and quote asset, its latest price, and its 24-hour change. A dash means the value is not available yet.
+A row shows the coin's symbol and quote asset, its latest price, and its 24-hour change — green when up, red when down. A dash means the value is not available yet. Below the change is an **Alert** link that opens that coin's alert editor; it reads `Alert · Off`, struck through, while alerts are globally disabled.
 
-Selecting a row opens a chart beneath the list, over **24h**, **7d**, or **30d**. The chart is drawn from the same venue that supplies the row's price. A diamond marks the series' opening close. If a refresh fails, the chart keeps showing the last data it had and says so rather than going blank.
+Selecting a row opens a chart beneath the list, over **24h**, **7d**, or **30d**. The chart is drawn from the same venue that supplies the row's price, and a caption underneath names it — for example `7d chart · Binance/USDT · ethereum`. A diamond on the left edge marks the series' opening close, with a dashed line across the chart at that level, so you can see at a glance whether the range closed up or down. If a refresh fails, the chart keeps showing the last data it had and says so rather than going blank.
 
 Rows dim when their source is offline.
 
-Use the arrows on a row to reorder it, or the remove button to delete it.
+The controls above the chart reorder the selected coin or remove it.
 
-<!-- screenshot: the panel with a row selected and its chart open -->
+![The panel with ETH selected and its 7-day chart open](docs/images/panel-with-chart.jpg)
 
 ### Price alerts
 
@@ -90,7 +92,7 @@ Two things to know:
 
 Alerts on a Coinbase-sourced coin inherit the 60-second poll's blind spot: a breach that begins and ends between two polls is not seen.
 
-<!-- screenshot: the alert editor -->
+![The alert editor for ETH](docs/images/alert-editor.jpg)
 
 ### Settings
 
@@ -99,15 +101,17 @@ The gear button in the panel header opens Settings.
 | Setting | What it does |
 |---|---|
 | Launch at login | Starts BitPrice when you sign in |
-| Price alerts | Global on/off for every alert |
-| Alert defaults | Cooldown and hysteresis seeded into *new* alerts; existing alerts are unchanged |
+| Price alerts | Global on/off for every alert; also reports whether macOS notifications are authorised |
+| Alert defaults | Cooldown (Off, 30s, 1m, 5m, 15m, 1h) and hysteresis (0%, 1%, 2%, 2.5%, 5%, 10%) seeded into *new* alerts; existing alerts are unchanged |
 | Text size | Small, Medium, Large, or Extra Large |
+
+The alerts section tells you directly whether macOS will deliver notifications. If authorisation was refused, alerts still fire and are recorded, but the system will not show a banner.
 
 Text size scales everything in the panel, and the panel widens with it — so a larger size does not squeeze the columns.
 
-**Quit** is at the bottom left of Settings.
+**Quit** is at the bottom left of Settings, below the version number.
 
-<!-- screenshot: the settings screen -->
+![The Settings screen](docs/images/settings.jpg)
 
 ## Development
 
