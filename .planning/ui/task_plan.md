@@ -392,10 +392,18 @@ thing that would reopen this is a request for Monero, which no amount of work on
 Binance or Coinbase can satisfy, since both have delisted it; KuCoin and Kraken
 both carry it, and of those two only KuCoin passes the 6h candle gate.
 
-### Make the price source a replaceable part
-Raised 2026-08-16, out of the price-source survey above. **Four steps — one, 2a,
-2b-1, 2b-2 — and they must not be combined**; see "Why they must be separate"
-below. Step one and 2a are done and verified on the desktop; 2b is outstanding.
+### Make the price source a replaceable part — COMPLETE 2026-08-16
+Kept in this section rather than moved, because the reasoning below is what a
+future venue addition needs to read. Nothing here is outstanding.
+
+Raised 2026-08-16, out of the price-source survey above. **Complete — all four
+steps (one, 2a, 2b-1, 2b-2) are done and each was verified on the desktop.** The
+app now carries three venues, two of them pushing over WebSocket, and adding a
+fourth means writing one `PriceSource` and — only if it pushes — one `PriceFeed`.
+
+They were kept separate throughout and must stay separate in the record; see
+"Why they must be separate" below for what each split was buying. Each entry
+keeps its own landing and verification note.
 
 **Step one is done and was verified on the desktop 2026-08-16**; see the closing
 section of this entry. **Step two — adding OKX — is outstanding and is the
@@ -627,8 +635,8 @@ aggregate to be live, so mixed-liveness aggregation is confirmed rather than
 assumed. No backup was needed for this step — unlike 2a, it changes no
 persisted data.
 
-**2b-2 — extract the protocol and add the OKX feed. Landed 2026-08-16, awaiting
-desktop test.** A `PriceFeed` protocol and a coordinator owning several feeds,
+**2b-2 — extract the protocol and add the OKX feed. Done, verified on the
+desktop 2026-08-16.** A `PriceFeed` protocol and a coordinator owning several feeds,
 plus an `OKXFeed` that connects first and then sends `{"op":"subscribe",…}`. By
 then the multi-feed state model is already correct and verified, so a failure
 here means the connection layer. Test count 57 to 64; build clean.
@@ -666,13 +674,23 @@ further mutations were rejected by the compiler rather than by tests, which is
 its own kind of evidence: the `catch` around the subscribe send is unreachable
 without the send, so the send cannot be silently dropped.
 
-**Not yet verified on the desktop.** `watchlist.json` was backed up to
-`watchlist.json.pre-okx-push` (sha256 `0cc7e99d…`). No schema or persistence
-change this time, so the backup is precaution rather than necessity.
+**Verified on the desktop 2026-08-16.** `watchlist.json` was backed up to
+`watchlist.json.pre-okx-push` (sha256 `0cc7e99d…`) as a precaution; no schema or
+persistence change was involved this time.
 
-What the desktop test needs to show: the BTC/USD row on OKX updates without
-waiting 30 seconds, the alert editor no longer says OKX polls, the four Binance
-rows are unaffected, and the header still reads live.
+All four checks passed, and the test as run covered more than was asked. **Three
+OKX markets pushed at once** — BTC/USDT, ETH/USDT and OKB/USDT — rather than the
+single market planned for. That exercises the batched subscribe frame and the
+`frame.arg.instId` routing against the real venue, where the unit tests only
+reach them through a fake socket. **Both push venues ran together**: four
+Binance rows and three OKX rows all updating live with the header reading
+`live`, which is the real-world form of tests 14e and 14g. The deliberate
+lifecycle duplication holds up outside the fakes.
+
+The alert editor showed no polling caveat for an OKX market, which follows from
+`liveness` becoming `.push` without any view being edited. The chart caption read
+`OKX/USDT · bitcoin` and drew correctly, so the newest-first candle ordering is
+right on the live endpoint too.
 
 Keeping them apart matters more here than it did for 2a. Step 3 touches the
 three-way identity checking (`configurationID`, `connectionID`,
@@ -775,6 +793,10 @@ an estimate will. What the three venues actually do today:
 | Binance | WebSocket push | live |
 | Coinbase | REST poll | 60s |
 | OKX | REST poll | 30s |
+
+*Superseded 2026-08-16 by 2b-2, which was done the same day rather than left.*
+OKX now pushes over WebSocket and the table above describes only the window
+between 2a and 2b-2. Coinbase remains the one polled venue.
 
 **Why they must be separate.** Each split isolates one class of failure.
 Combined, step one and step two leave a failing test unable to distinguish a
