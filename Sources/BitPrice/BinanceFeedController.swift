@@ -62,7 +62,7 @@ final class BinanceFeedController {
 
     func attachSink(_ sink: any PriceFeedSink) {
         self.sink = sink
-        sink.feedStateDidChange(state)
+        sink.feedStateDidChange(state, venue: .binance)
     }
 
     func replaceProducts(_ productIDs: Set<String>) {
@@ -248,6 +248,7 @@ final class BinanceFeedController {
               let percent = finiteDecimal(from: wrapper.data.percent),
               wrapper.data.eventTime >= 0 else { return }
         let tick = PriceTick(
+            venue: .binance,
             productID: wrapper.data.symbol,
             price: price,
             changePercent: percent,
@@ -285,6 +286,6 @@ final class BinanceFeedController {
     private func transition(to newState: FeedLifecycle) {
         guard state != newState else { return }
         state = newState
-        sink?.feedStateDidChange(newState)
+        sink?.feedStateDidChange(newState, venue: .binance)
     }
 }

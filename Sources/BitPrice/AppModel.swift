@@ -14,7 +14,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
     @Published private(set) var persistedState: PersistedState
     @Published private(set) var quotes: [UUID: Quote] = [:]
     @Published private(set) var charts: [UUID: ChartSeries] = [:]
-    @Published private(set) var connectionState: FeedLifecycle = .stopped
+    @Published private(set) var connectionStates: [Venue: FeedLifecycle] = [:]
     @Published private(set) var searchResults: [SearchResult] = []
     @Published private(set) var searchActivity: RequestActivity = .idle
     @Published private(set) var sourceActivity: [UUID: RequestActivity] = [:]
@@ -346,7 +346,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
 
     func feedDidAccept(_ tick: PriceTick) {
         guard let item = persistedState.items.first(where: {
-            $0.mapping?.exchange == .binance && $0.mapping?.productID == tick.productID
+            $0.mapping?.exchange == tick.venue && $0.mapping?.productID == tick.productID
         }), let mapping = item.mapping else { return }
         marketRevisions[item.id, default: 0] &+= 1
         let quote = Quote(
@@ -363,8 +363,8 @@ final class AppModel: ObservableObject, PriceFeedSink {
         if !hadQuote { refreshChart(itemID: item.id) }
     }
 
-    func feedStateDidChange(_ state: FeedLifecycle) {
-        connectionState = state
+    func feedStateDidChange(_ state: FeedLifecycle, venue: Venue) {
+        connectionStates[venue] = state
     }
 
     func handleSleep() {
@@ -414,6 +414,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
     func rowPresentation(for item: WatchItem) -> ConnectionPresentation {
         guard let source = primaryVenue(for: item),
               let liveness = sourceLiveness(for: source) else { return .offline }
+        let connectionState = connectionStates[source] ?? .stopped
         if let quote = quotes[item.id] {
             // A 60-second poll plus request latency can approach the push-feed
             // window; retaining 120 seconds avoids marking a normal polling

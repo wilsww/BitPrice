@@ -205,9 +205,9 @@ final class FakeWebSocketFactory: WebSocketSessionFactory {
 @MainActor
 final class TestFeedSink: PriceFeedSink {
     private(set) var ticks: [PriceTick] = []
-    private(set) var states: [FeedLifecycle] = []
+    private(set) var states: [(state: FeedLifecycle, venue: Venue)] = []
     func feedDidAccept(_ tick: PriceTick) { ticks.append(tick) }
-    func feedStateDidChange(_ state: FeedLifecycle) { states.append(state) }
+    func feedStateDidChange(_ state: FeedLifecycle, venue: Venue) { states.append((state, venue)) }
 }
 
 @MainActor
@@ -1256,7 +1256,7 @@ struct BitPriceTests {
                 try model.saveAlert(itemID: item.id, proposed: alert)
                 await Task.yield()
                 model.feedDidAccept(PriceTick(
-                    productID: "BTCUSDT", price: 11, changePercent: 1,
+                    venue: .binance, productID: "BTCUSDT", price: 11, changePercent: 1,
                     eventDate: wall.now(), receivedInstant: FixedContinuousClock().now()
                 ))
                 await Task.yield(); await Task.yield()
@@ -1302,6 +1302,7 @@ struct BitPriceTests {
                 )
                 try model.setAlertsEnabled(false)
                 model.feedDidAccept(PriceTick(
+                    venue: .binance,
                     productID: "BTCUSDT",
                     price: 11,
                     changePercent: 1,
@@ -1315,6 +1316,7 @@ struct BitPriceTests {
 
                 try model.setAlertsEnabled(true)
                 model.feedDidAccept(PriceTick(
+                    venue: .binance,
                     productID: "BTCUSDT",
                     price: 11,
                     changePercent: 1,
@@ -1352,6 +1354,7 @@ struct BitPriceTests {
                 )
                 try expect(model.menuBarTitle == "BitPrice", "menu title without a primary quote")
                 model.feedDidAccept(PriceTick(
+                    venue: .binance,
                     productID: "BTCUSDT",
                     price: Decimal(string: "63928.65")!,
                     changePercent: Decimal(string: "1.34")!,
@@ -1422,6 +1425,7 @@ struct BitPriceTests {
                     alert: nil
                 ))
                 model.feedDidAccept(PriceTick(
+                    venue: .binance,
                     productID: "BTCUSDT",
                     price: Decimal(string: "63928.65")!,
                     changePercent: Decimal(string: "1.34")!,
@@ -1481,6 +1485,45 @@ struct BitPriceTests {
                            "OKX stopped reporting a 30-second poll, so users would get the wrong alert timing warning")
                 try expect(model.configuredSourceNames == "Binance, Coinbase or OKX",
                            "the no-market message no longer names the configured sources")
+                model.shutdown()
+            },
+            AcceptanceTest(name: "22i one venue feed state cannot stale another venue's row") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let model = AppModel(
+                    persistenceStore: try PersistenceStore(rootDirectory: root),
+                    processLock: try ProcessLock(rootDirectory: root),
+                    restClients: clients(transport: StubHTTPTransport([])),
+                    feedController: controllerParts().controller,
+                    notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
+                    continuousClock: FixedContinuousClock(),
+                    suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false,
+                    observeSleepWake: false
+                )
+                let item = model.items[0]
+                model.feedDidAccept(PriceTick(
+                    venue: .binance,
+                    productID: "BTCUSDT",
+                    price: 100,
+                    changePercent: 1,
+                    eventDate: Date(timeIntervalSince1970: 2_000),
+                    receivedInstant: FixedContinuousClock().now()
+                ))
+                model.feedStateDidChange(.connected, venue: .binance)
+                model.feedStateDidChange(.connected, venue: .okx)
+                try expect(
+                    model.connectionStates[.binance] == .connected &&
+                        model.connectionStates[.okx] == .connected,
+                    "a second push feed would overwrite the connection state used by an existing venue"
+                )
+
+                model.feedStateDidChange(.stopped, venue: .okx)
+                try expect(
+                    model.rowPresentation(for: item) == .live && model.aggregatePresentation == .live,
+                    "an OKX disconnect would silently make a healthy Binance row and the menu-bar aggregate look stale"
+                )
                 model.shutdown()
             },
             AcceptanceTest(name: "22b chart axis calculations") {

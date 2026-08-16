@@ -232,6 +232,7 @@ enum QuoteChange: Equatable, Sendable {
 }
 
 struct PriceTick: Equatable, Sendable {
+    let venue: Venue
     let productID: String
     let price: Decimal
     let changePercent: Decimal
@@ -393,7 +394,7 @@ protocol RequestPacer: Sendable {
 @MainActor
 protocol PriceFeedSink: AnyObject {
     func feedDidAccept(_ tick: PriceTick)
-    func feedStateDidChange(_ state: FeedLifecycle)
+    func feedStateDidChange(_ state: FeedLifecycle, venue: Venue)
 }
 
 enum WebSocketInboundMessage: Sendable {
