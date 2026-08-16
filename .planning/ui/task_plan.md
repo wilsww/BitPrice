@@ -228,6 +228,65 @@ Near-miss tickers are not made harder to spot — `BTC/USD1` separates itself fr
 `BTC/USD` more clearly than `BTCUSD1` did, because the slash marks where the
 quote asset begins.
 
+### The four screens do not lay out their buttons the same way
+Raised 2026-08-16. Settings was designed deliberately in ui24; Add coin and the
+Alert editor were built before that and their layout was never revisited against
+it. The result is three screens that each answer the same questions differently.
+
+Measured against Settings as the baseline:
+
+| | Settings | Add coin | Alert editor |
+|---|---|---|---|
+| Header back control | leading, `Back` + chevron | leading, `Cancel`, no icon | **trailing**, `Cancel` |
+| Content grouping | four cards, `padding(12)`, radius 10 | two cards, `padding(10)`, radius 8 | **no cards at all** |
+| Action row position | bottom | **mid-content**, warning banner below it | bottom |
+| Action control size | `.large` | `.large` | **unset (regular)** |
+| Destructive action | `role: .destructive` + `.tint(.red)` + prominent | — | **no role, no tint** |
+
+Three of those are visible in a screenshot without looking at the source: the
+Alert editor's Cancel is on the opposite side from the other two screens, the
+Alert editor has none of the card styling the other two share, and Add coin's
+`Back`/`Add` pair sits in the middle of the screen with an orange warning
+underneath, so it does not read as the end of the flow.
+
+**Planned change, in three parts.**
+
+**A — extract the shared pieces.** `panelHeader(title:leading:)`, a `panelCard`
+container, and a `panelActionBar`. Settings is converted first and must come out
+pixel-identical; it is the baseline, so any visible change there means the
+extraction is wrong, not that Settings needed fixing.
+
+**B — apply to the other two screens.** Add coin: `Cancel` becomes `Back` with
+the chevron, the action row moves to the very bottom and the warning banner
+moves above it. Alert editor: the back control moves to the leading edge, the
+fields are grouped into cards, the action row gets `.controlSize(.large)`,
+`Remove alert` gets the destructive role and red tint, and `Save` becomes
+prominent.
+
+**C — one rule for which side a button goes on.** The two screens that have
+action rows currently disagree about what the right-hand slot means. Settings
+puts `Quit` there — destructive. The Alert editor puts `Save` there — the
+confirming action — with `Remove alert` on the left. Both readings are
+defensible in isolation and cannot both be the rule.
+
+Decided: **the trailing slot is the confirming action; the leading slot is
+cancel or destroy.** That is the macOS convention and it is what the Alert
+editor already does. `Quit` therefore moves to the leading edge of the Settings
+footer, giving up the trailing slot it currently occupies.
+
+| | leading | trailing |
+|---|---|---|
+| Settings | `Quit` (destructive, red) | — |
+| Add coin | `Back` | `Add` (prominent) |
+| Alert editor | `Remove alert` (destructive, red) | `Save` (prominent) |
+
+**Known risk.** The `SettingsView` comment above its body records two failed
+attempts at making that screen scroll, and the finding that Small — not Extra
+Large — is the tightest fit, because the panel heights grow 40% across the text
+sizes while the type does not. Extracting a card container must not change the
+height of that content. Settings needs re-checking on the desktop at **Small and
+Extra Large** specifically, not at whatever size happens to be set.
+
 ### Charts sometimes did not draw — FIXED 2026-08-16
 Reported from the desktop after 2b-2: charts failed to appear at all three
 ranges, intermittently, and worse right after a relaunch. **Three separate
