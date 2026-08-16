@@ -197,6 +197,7 @@ func schemaDispatch(
 final class PersistenceStore {
     let rootDirectory: URL
     let stateURL: URL
+    let recoveryBackupURL: URL
     private let fileManager: FileManager
     private let writer: any AtomicFileWriting
     private(set) var recoveryProtected = false
@@ -208,6 +209,7 @@ final class PersistenceStore {
     ) throws {
         self.rootDirectory = rootDirectory
         self.stateURL = rootDirectory.appendingPathComponent("watchlist.json", isDirectory: false)
+        self.recoveryBackupURL = rootDirectory.appendingPathComponent("watchlist.recovery-backup.json", isDirectory: false)
         self.fileManager = fileManager
         self.writer = writer
         try fileManager.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
@@ -269,6 +271,30 @@ final class PersistenceStore {
         let data = try Self.makeEncoder().encode(Self.dto(from: state))
         try writer.write(data, to: stateURL)
         if allowRecoveryReset { recoveryProtected = false }
+    }
+
+    /// Copies the damaged file aside so a reset does not destroy the only copy.
+    ///
+    /// An unreadable original is deliberately not an error. One of the four ways
+    /// into recovery is that `Data(contentsOf:)` failed, and in exactly that case
+    /// this read fails too. Treating that as a reason to abort would leave the
+    /// user permanently stuck: the file cannot be read, so it can never be backed
+    /// up, so the reset can never run, and the only escape would be deleting the
+    /// file by hand in Finder. There is also nothing to protect — bytes that
+    /// cannot be read cannot be recovered from a copy either.
+    ///
+    /// A write failure is different and does propagate. There the original was
+    /// read successfully, so it is real, salvageable data, and overwriting it
+    /// after failing to save it elsewhere would be the destructive outcome this
+    /// backup exists to prevent.
+    ///
+    /// Returns whether a copy was actually written, so the caller can tell the
+    /// user which of the two happened.
+    @discardableResult
+    func backupRecoveryFile() throws -> Bool {
+        guard let original = try? Data(contentsOf: stateURL) else { return false }
+        try original.write(to: recoveryBackupURL, options: .atomic)
+        return true
     }
 
     func encodedData(for state: PersistedState) throws -> Data {

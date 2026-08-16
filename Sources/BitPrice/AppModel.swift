@@ -101,7 +101,24 @@ final class AppModel: ObservableObject, BinanceFeedSink {
         case .recovery(let seed, let reason, let originalBytes):
             persistedState = seed
             persistenceMode = .recovery(reason: reason, originalBytes: originalBytes)
-            recoveryMessage = "\(reason) Original file preserved at \(persistenceStore.stateURL.path)."
+            // Three lines, and each earns its place: what went wrong, where the
+            // untouched file is, and whether pressing the button below costs
+            // anything. A longer version was tried on the desktop and swallowed
+            // the top of the panel — the reason and the path are what a user
+            // needs, and the situation sentence merely restated the reason in
+            // other words. The button label carries the rest.
+            //
+            // The read-failure branch hands back empty bytes because it never got
+            // to read the file. Promising a copy of them would be a lie, and it is
+            // the one case where starting over saves nothing aside.
+            let copyLine = originalBytes.isEmpty
+                ? "It cannot be read, so starting over saves no copy."
+                : "Starting over saves a copy alongside it first."
+            recoveryMessage = """
+            \(reason). Your watchlist was not loaded.
+            \(persistenceStore.stateURL.path)
+            \(copyLine)
+            """
         }
         for item in persistedState.items { marketRevisions[item.id] = 0 }
         feedController.attachSink(self)
@@ -261,6 +278,7 @@ final class AppModel: ObservableObject, BinanceFeedSink {
         guard case .recovery = persistenceMode else { return }
         let seed = PersistedState.bitcoinSeed()
         do {
+            try persistenceStore.backupRecoveryFile()
             try persistenceStore.save(seed, allowRecoveryReset: true)
             persistedState = seed
             persistenceMode = .writable

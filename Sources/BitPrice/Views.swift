@@ -487,7 +487,7 @@ struct ContentView: View {
             }
             if let recovery = model.recoveryMessage {
                 BannerView(text: recovery, color: .orange)
-                Button("Reset protected file") { model.resetRecovery() }
+                Button("Discard file and start over") { model.resetRecovery() }
             }
             if let error = model.lastError { BannerView(text: error, color: .red) }
             if model.items.isEmpty {

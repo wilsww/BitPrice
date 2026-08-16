@@ -950,6 +950,143 @@ struct BitPriceTests {
                     throw TestFailure(description: "newer schema recovery reset did not produce a loaded state")
                 }
             },
+            AcceptanceTest(name: "20d recovery message explains the data and reset") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let newerVersion = currentSchemaVersion + 1
+                let stateURL = root.appendingPathComponent("watchlist.json")
+                try Data("{\"schemaVersion\":\(newerVersion)}".utf8).write(to: stateURL)
+                let reason = "Schema version \(newerVersion) is newer than this app supports"
+
+                do {
+                    let model = try recoveryModel(root: root)
+                    defer { model.shutdown() }
+                    guard let message = model.recoveryMessage else {
+                        throw TestFailure(description: "recovery did not produce a user-facing message")
+                    }
+                    try expect(
+                        message.contains("Your watchlist was not loaded"),
+                        "recovery message did not explain that the watchlist was not loaded"
+                    )
+                    try expect(message.contains(reason), "recovery message omitted the specific recovery reason")
+                    // The seam is the point. The reasons carry no trailing
+                    // punctuation, so composing them without one produced
+                    // "...app supports Your watchlist..." on a desktop.
+                    try expect(
+                        message.hasPrefix("\(reason). Your watchlist was not loaded.\n"),
+                        "recovery reason ran into the next sentence"
+                    )
+                    try expect(
+                        message.contains("\n\(stateURL.path)\n"),
+                        "recovery message omitted the preserved file's location"
+                    )
+                    try expect(
+                        message.contains("Starting over saves a copy alongside it first."),
+                        "recovery message did not say that starting over keeps a copy"
+                    )
+                    // Three lines. A longer version swallowed the top of the panel.
+                    try expect(
+                        message.split(separator: "\n").count == 3,
+                        "recovery message grew past the three lines the panel can spare"
+                    )
+                }
+
+                let views = try String(contentsOfFile: "Sources/BitPrice/Views.swift", encoding: .utf8)
+                try expect(
+                    views.contains("Button(\"Discard file and start over\")"),
+                    "recovery reset button still hides its destructive action"
+                )
+            },
+            AcceptanceTest(name: "20e recovery reset replaces its backup copy") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                let firstDamagedBytes = Data("first damaged watchlist".utf8)
+                try firstDamagedBytes.write(to: store.stateURL)
+
+                do {
+                    let model = try recoveryModel(root: root)
+                    defer { model.shutdown() }
+                    model.resetRecovery()
+                    try expect(model.recoveryMessage == nil, "first recovery reset did not leave recovery mode")
+                }
+                let firstBackupBytes = try Data(contentsOf: store.recoveryBackupURL)
+                try expect(firstBackupBytes == firstDamagedBytes, "first recovery reset did not preserve the damaged bytes")
+
+                let secondDamagedBytes = Data("second damaged watchlist".utf8)
+                try secondDamagedBytes.write(to: store.stateURL)
+                do {
+                    let model = try recoveryModel(root: root)
+                    defer { model.shutdown() }
+                    model.resetRecovery()
+                    try expect(model.recoveryMessage == nil, "second recovery reset did not leave recovery mode")
+                }
+                let secondBackupBytes = try Data(contentsOf: store.recoveryBackupURL)
+                try expect(
+                    secondBackupBytes == secondDamagedBytes,
+                    "second recovery reset did not replace the previous backup bytes"
+                )
+                let backupFiles = try FileManager.default.contentsOfDirectory(
+                    at: root,
+                    includingPropertiesForKeys: nil
+                ).filter { $0.lastPathComponent.contains("recovery-backup") }
+                try expect(backupFiles.count == 1, "recovery resets accumulated multiple backup files")
+            },
+            // An unreadable original is the one case where the backup cannot run and
+            // the reset must proceed anyway. The read-failure branch is entered
+            // *because* the file cannot be read, so refusing to reset without a
+            // backup would trap the user in recovery mode with no way out short of
+            // deleting the file in Finder — and there is nothing to protect, since
+            // bytes that cannot be read cannot be salvaged from a copy either.
+            AcceptanceTest(name: "20f an unreadable original still lets the user start over") {
+                let root = try temporaryRoot()
+                let store = try PersistenceStore(rootDirectory: root)
+                defer {
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: store.stateURL.path)
+                    try? FileManager.default.removeItem(at: root)
+                }
+                try store.save(.bitcoinSeed())
+                try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: store.stateURL.path)
+
+                let model = try recoveryModel(root: root)
+                defer { model.shutdown() }
+                try expect(model.recoveryMessage != nil, "unreadable file did not enter recovery")
+                model.resetRecovery()
+                try expect(model.lastError == nil, "reset reported a failure it should have tolerated")
+                try expect(model.recoveryMessage == nil, "reset did not leave recovery mode")
+                try expect(!model.isReadOnly, "reset left the store read-only")
+                try expect(
+                    !FileManager.default.fileExists(atPath: store.recoveryBackupURL.path),
+                    "a backup was claimed for bytes that could not be read"
+                )
+            },
+            AcceptanceTest(name: "20g a failed backup write aborts the reset") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                let damaged = Data("not json".utf8)
+                try damaged.write(to: store.stateURL)
+
+                // Only the backup path is made unwritable, by occupying it with a
+                // directory. Making the whole folder read-only would fail the seed
+                // write too, so the reset would abort either way and this test would
+                // pass without the backup step existing at all.
+                try FileManager.default.createDirectory(at: store.recoveryBackupURL, withIntermediateDirectories: true)
+
+                let model = try recoveryModel(root: root)
+                defer { model.shutdown() }
+                // The original reads fine here, so it is real salvageable data.
+                // Overwriting it after failing to save it elsewhere is exactly what
+                // the backup exists to prevent.
+                model.resetRecovery()
+
+                try expect(model.lastError?.hasPrefix("Reset failed:") == true,
+                           "a failed backup write was not reported")
+                try expect(model.recoveryMessage != nil, "a failed backup write left recovery mode")
+                try expect(model.isReadOnly, "a failed backup write left the store writable")
+                let preserved = try Data(contentsOf: store.stateURL)
+                try expect(preserved == damaged, "a failed backup write still replaced the original")
+            },
             AcceptanceTest(name: "21 durable fire precedes injected notification submission") {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
@@ -1465,6 +1602,25 @@ struct BitPriceTests {
             sessionFactory: factory, continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock()
         )
         return (controller, session, factory)
+    }
+
+    @MainActor
+    static func recoveryModel(root: URL) throws -> AppModel {
+        let store = try PersistenceStore(rootDirectory: root)
+        let lock = try ProcessLock(rootDirectory: root)
+        let parts = controllerParts()
+        return AppModel(
+            persistenceStore: store,
+            processLock: lock,
+            restClients: clients(transport: StubHTTPTransport([])),
+            feedController: parts.controller,
+            notifications: FakeNotifications(),
+            wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
+            continuousClock: FixedContinuousClock(),
+            suspendingClock: FixedSuspendingClock(),
+            startNetworking: false,
+            observeSleepWake: false
+        )
     }
 
     static func response(status: Int = 200, body: Data) -> HTTPResponseData {
