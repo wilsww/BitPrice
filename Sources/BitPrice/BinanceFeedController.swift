@@ -21,13 +21,13 @@ private struct BinanceCombinedTicker: Decodable {
 
 @MainActor
 final class BinanceFeedController {
-    private weak var sink: (any BinanceFeedSink)?
+    private weak var sink: (any PriceFeedSink)?
     private let continuousClock: any ContinuousTimeSource
     private let suspendingClock: any SuspendingTimeSource
     private let delegateAdapter: WebSocketDelegateAdapter
     private var session: (any WebSocketSessionTransport)?
 
-    private(set) var state: BinanceLifecycle = .stopped
+    private(set) var state: FeedLifecycle = .stopped
     private(set) var currentProductIDs: Set<String> = []
     private(set) var configurationID = UUID()
     private(set) var connectionID = UUID()
@@ -47,7 +47,7 @@ final class BinanceFeedController {
         sessionFactory: any WebSocketSessionFactory,
         continuousClock: any ContinuousTimeSource,
         suspendingClock: any SuspendingTimeSource,
-        sink: (any BinanceFeedSink)? = nil
+        sink: (any PriceFeedSink)? = nil
     ) {
         self.continuousClock = continuousClock
         self.suspendingClock = suspendingClock
@@ -60,7 +60,7 @@ final class BinanceFeedController {
         session = sessionFactory.makeLifetimeSession(delegate: adapter)
     }
 
-    func attachSink(_ sink: any BinanceFeedSink) {
+    func attachSink(_ sink: any PriceFeedSink) {
         self.sink = sink
         sink.feedStateDidChange(state)
     }
@@ -247,7 +247,7 @@ final class BinanceFeedController {
               let price = positiveDecimal(from: wrapper.data.close),
               let percent = finiteDecimal(from: wrapper.data.percent),
               wrapper.data.eventTime >= 0 else { return }
-        let tick = BinanceTick(
+        let tick = PriceTick(
             productID: wrapper.data.symbol,
             price: price,
             changePercent: percent,
@@ -282,7 +282,7 @@ final class BinanceFeedController {
         currentSocket = nil
     }
 
-    private func transition(to newState: BinanceLifecycle) {
+    private func transition(to newState: FeedLifecycle) {
         guard state != newState else { return }
         state = newState
         sink?.feedStateDidChange(newState)

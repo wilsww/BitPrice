@@ -203,11 +203,11 @@ final class FakeWebSocketFactory: WebSocketSessionFactory {
 }
 
 @MainActor
-final class TestFeedSink: BinanceFeedSink {
-    private(set) var ticks: [BinanceTick] = []
-    private(set) var states: [BinanceLifecycle] = []
-    func feedDidAccept(_ tick: BinanceTick) { ticks.append(tick) }
-    func feedStateDidChange(_ state: BinanceLifecycle) { states.append(state) }
+final class TestFeedSink: PriceFeedSink {
+    private(set) var ticks: [PriceTick] = []
+    private(set) var states: [FeedLifecycle] = []
+    func feedDidAccept(_ tick: PriceTick) { ticks.append(tick) }
+    func feedStateDidChange(_ state: FeedLifecycle) { states.append(state) }
 }
 
 @MainActor
@@ -277,7 +277,7 @@ struct BitPriceTests {
                 let store = try PersistenceStore(rootDirectory: root)
                 guard case .firstLaunch(let seed) = store.load() else { throw TestFailure(description: "not first launch") }
                 try store.save(seed)
-                try store.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil))
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
                 guard case .loaded(let empty) = store.load() else { throw TestFailure(description: "empty state did not load") }
                 try expect(empty.items.isEmpty && empty.primaryItemID == nil, "empty state reseeded")
             },
@@ -289,7 +289,7 @@ struct BitPriceTests {
                 try normal.save(seed)
                 let before = try Data(contentsOf: normal.stateURL)
                 let failing = try PersistenceStore(rootDirectory: root, writer: FailingWriter())
-                do { try failing.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil)) }
+                do { try failing.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil)) }
                 catch {}
                 let after = try Data(contentsOf: normal.stateURL)
                 try expect(after == before, "failed save changed bytes")
@@ -301,8 +301,7 @@ struct BitPriceTests {
                 do { try validatePersistedState(duplicate); throw TestFailure(description: "duplicate accepted") }
                 catch is ValidationFailure {}
                 var noMapping = seed
-                noMapping.items[0].binanceMapping = nil
-                noMapping.items[0].coinbaseMapping = nil
+                noMapping.items[0].mapping = nil
                 do { try validatePersistedState(noMapping); throw TestFailure(description: "mappingless accepted") }
                 catch is ValidationFailure {}
             },
@@ -319,16 +318,16 @@ struct BitPriceTests {
                 )
                 let first = WatchItem(
                     id: firstID, coinGeckoID: "ethereum", symbol: "ETH", name: "Ethereum",
-                    binanceMapping: firstMapping, coinbaseMapping: nil, alert: nil
+                    mapping: firstMapping, alert: nil
                 )
                 let second = WatchItem(
                     id: secondID, coinGeckoID: "ethereum", symbol: "ETH", name: "Ethereum",
-                    binanceMapping: secondMapping, coinbaseMapping: nil, alert: nil
+                    mapping: secondMapping, alert: nil
                 )
-                var state = PersistedState(schemaVersion: 1, items: [first, second], primaryItemID: firstID)
+                var state = PersistedState(schemaVersion: currentSchemaVersion, items: [first, second], primaryItemID: firstID)
                 try validatePersistedState(state)
 
-                state.items[1].binanceMapping = firstMapping
+                state.items[1].mapping = firstMapping
                 do {
                     try validatePersistedState(state)
                     throw TestFailure(description: "same CoinGecko ID and market were accepted")
@@ -341,7 +340,7 @@ struct BitPriceTests {
                     "ValidationFailure lost its user-facing message"
                 )
             },
-            AcceptanceTest(name: "06 exact v0 migration and v1 fixture") {
+            AcceptanceTest(name: "06 exact v0 and v1 migration") {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
                 let fixture = try Data(contentsOf: URL(fileURLWithPath: "Tests/Fixtures/watchlist-v0.json"))
@@ -351,15 +350,43 @@ struct BitPriceTests {
                 try expect(state.items[0].alert?.isArmed == false, "unknown legacy latch was armed")
                 try expect(state.defaultAlertCooldownSeconds == 30 && state.defaultAlertHysteresisPercent == 10,
                            "v0 migration did not apply alert defaults")
+                try expect(state.schemaVersion == currentSchemaVersion, "v0 did not migrate through to the current schema")
+                try expect(state.items[0].mapping?.exchange == .binance,
+                           "v0 dual mappings did not preserve the Binance-first runtime rule")
                 try store.save(state)
-                guard case .loaded = store.load() else { throw TestFailure(description: "v1 reload failed") }
+                guard case .loaded = store.load() else { throw TestFailure(description: "v2 reload failed") }
                 let v1Root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: v1Root) }
                 let v1Fixture = try Data(contentsOf: URL(fileURLWithPath: "Tests/Fixtures/watchlist-v1.json"))
                 try v1Fixture.write(to: v1Root.appendingPathComponent("watchlist.json"))
                 let v1Store = try PersistenceStore(rootDirectory: v1Root)
-                guard case .loaded(let fixtureState) = v1Store.load() else { throw TestFailure(description: "canonical v1 fixture failed") }
+                guard case .migrated(let fixtureState) = v1Store.load() else {
+                    throw TestFailure(description: "canonical v1 fixture did not migrate")
+                }
                 try expect(fixtureState.items[0].alert?.threshold == Decimal(string: "100000.25"), "decimal string changed")
+                try expect(fixtureState.items[0].mapping?.exchange == .binance &&
+                               fixtureState.items[0].mapping?.productID == "BTCUSDT",
+                           "v1 dual mappings did not choose Binance")
+                try expect(!v1Store.recoveryProtected, "valid dual-mapping v1 fixture entered recovery")
+
+                guard var coinbaseOnlyObject = try JSONSerialization.jsonObject(with: v1Fixture) as? [String: Any],
+                      var coinbaseOnlyItems = coinbaseOnlyObject["items"] as? [[String: Any]],
+                      !coinbaseOnlyItems.isEmpty else {
+                    throw TestFailure(description: "v1 fixture was not mutable JSON")
+                }
+                coinbaseOnlyItems[0].removeValue(forKey: "binanceMapping")
+                coinbaseOnlyObject["items"] = coinbaseOnlyItems
+                let coinbaseOnlyRoot = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: coinbaseOnlyRoot) }
+                try JSONSerialization.data(withJSONObject: coinbaseOnlyObject)
+                    .write(to: coinbaseOnlyRoot.appendingPathComponent("watchlist.json"))
+                let coinbaseOnlyStore = try PersistenceStore(rootDirectory: coinbaseOnlyRoot)
+                guard case .migrated(let coinbaseOnlyState) = coinbaseOnlyStore.load() else {
+                    throw TestFailure(description: "Coinbase-only v1 fixture did not migrate")
+                }
+                try expect(coinbaseOnlyState.items[0].mapping?.exchange == .coinbase &&
+                               coinbaseOnlyState.items[0].mapping?.productID == "BTC-USD",
+                           "v1 single mapping did not preserve Coinbase")
             },
             AcceptanceTest(name: "06b v1 without global alert flag defaults on") {
                 let fixture = try Data(contentsOf: URL(fileURLWithPath: "Tests/Fixtures/watchlist-v1.json"))
@@ -376,7 +403,7 @@ struct BitPriceTests {
                 defer { try? FileManager.default.removeItem(at: root) }
                 try legacyV1.write(to: root.appendingPathComponent("watchlist.json"))
                 let store = try PersistenceStore(rootDirectory: root)
-                guard case .loaded(let state) = store.load() else {
+                guard case .migrated(let state) = store.load() else {
                     throw TestFailure(description: "v1 without alertsEnabled entered recovery")
                 }
                 try expect(state.alertsEnabled, "absent alertsEnabled did not default to on")
@@ -406,7 +433,7 @@ struct BitPriceTests {
                 defer { try? FileManager.default.removeItem(at: root) }
                 try invalidPreference.write(to: root.appendingPathComponent("watchlist.json"))
                 let store = try PersistenceStore(rootDirectory: root)
-                guard case .loaded(let state) = store.load() else {
+                guard case .migrated(let state) = store.load() else {
                     throw TestFailure(description: "unrecognized textSize entered recovery")
                 }
                 try expect(state.textSize == .medium, "unrecognized textSize did not default to medium")
@@ -483,13 +510,13 @@ struct BitPriceTests {
                 defer { try? FileManager.default.removeItem(at: root) }
                 try unknownRange.write(to: root.appendingPathComponent("watchlist.json"))
                 let store = try PersistenceStore(rootDirectory: root)
-                guard case .loaded(let state) = store.load() else {
+                guard case .migrated(let state) = store.load() else {
                     throw TestFailure(description: "unrecognized chart range entered recovery")
                 }
                 try expect(state.chartRange == .hours24, "unrecognized chart range did not default to 24h")
                 try expect(!store.recoveryProtected, "unrecognized chart range protected a valid v1 file")
             },
-            AcceptanceTest(name: "06g persisted dual mappings remain loadable") {
+            AcceptanceTest(name: "06g persisted single mapping round trips") {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
                 let store = try PersistenceStore(rootDirectory: root)
@@ -498,14 +525,23 @@ struct BitPriceTests {
                 guard case .loaded(let reloaded) = store.load(),
                       let originalItem = original.items.first,
                       let reloadedItem = reloaded.items.first else {
-                    throw TestFailure(description: "persisted dual-mapping item did not load")
+                    throw TestFailure(description: "persisted single-mapping item did not load")
                 }
                 try expect(
-                    reloadedItem.binanceMapping == originalItem.binanceMapping &&
-                        reloadedItem.coinbaseMapping == originalItem.coinbaseMapping,
-                    "loading a legacy item dropped one of its mappings"
+                    reloadedItem.mapping == originalItem.mapping,
+                    "loading a current item changed its mapping"
                 )
-                try expect(!store.recoveryProtected, "persisted dual-mapping item entered recovery")
+                try expect(!store.recoveryProtected, "persisted single-mapping item entered recovery")
+                let encoded = try store.encodedData(for: reloaded)
+                guard let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any],
+                      let items = object["items"] as? [[String: Any]],
+                      let item = items.first else {
+                    throw TestFailure(description: "v2 encoding was not a JSON object")
+                }
+                try expect(object["schemaVersion"] as? Int == currentSchemaVersion,
+                           "current schema version was not encoded")
+                try expect(item["mapping"] != nil && item["binanceMapping"] == nil && item["coinbaseMapping"] == nil,
+                           "v2 encoding retained named mapping fields")
             },
             AcceptanceTest(name: "07 future unregistered-older dispatch path") {
                 try expect(schemaDispatch(version: 1, current: 2, registeredVersions: [0, 2]) == .unregisteredOlder,
@@ -531,6 +567,13 @@ struct BitPriceTests {
                     ordered.map(\.productID) == ["ETH-USD", "ETHUSDT", "ETHUSDC", "ETHBTC"],
                     "venue candidates were not ordered by preferred quote asset"
                 )
+                let sources = configuredPriceSources(clients: clients)
+                try expect(sources.map(\.venue) == [.binance, .coinbase], "configured source order changed")
+                try expect(sources[0].liveness == .push && sources[1].liveness == .polled(seconds: 60),
+                           "configured source liveness changed")
+                try expect(sources.allSatisfy { source in
+                    ChartRange.allCases.allSatisfy(source.supports)
+                }, "a configured source stopped supporting a current chart range")
             },
             AcceptanceTest(name: "08c CoinGecko HTML entity decoding") {
                 let searchBody = Data(#"{"coins":[{"id":"sand","name":"S&amp;L &lt;token&gt; &quot;quoted&quot; &#39;single&#39; &apos;apostrophe&apos; &#38; &#x26; & bare","symbol":"s&AMP;l","market_cap_rank":null,"thumb":null}]}"#.utf8)
@@ -660,7 +703,7 @@ struct BitPriceTests {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
                 let store = try PersistenceStore(rootDirectory: root)
-                try store.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil))
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
                 let lock = try ProcessLock(rootDirectory: root)
                 let transport = RoutingHTTPTransport(
                     responses: ["/stats": response(body: Data(#"{"last":"100","open":"90"}"#.utf8))],
@@ -678,7 +721,7 @@ struct BitPriceTests {
                 let mapping = VenueMapping(exchange: .coinbase, productID: "ETH-USD", baseAsset: "ETH",
                                            quoteAsset: "USD", provenance: .userConfirmedTickerMatch)
                 try model.addItem(WatchItem(id: id, coinGeckoID: "ethereum", symbol: "ETH", name: "Ethereum",
-                                            binanceMapping: nil, coinbaseMapping: mapping, alert: nil))
+                                            mapping: mapping, alert: nil))
                 for _ in 0..<1_000 {
                     if model.quotes[id] != nil { break }
                     try await Task.sleep(for: .milliseconds(1))
@@ -691,7 +734,7 @@ struct BitPriceTests {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
                 let store = try PersistenceStore(rootDirectory: root)
-                try store.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil))
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
                 let lock = try ProcessLock(rootDirectory: root)
                 let transport = DelayedPathHTTPTransport()
                 let parts = controllerParts()
@@ -706,7 +749,7 @@ struct BitPriceTests {
                 let original = VenueMapping(exchange: .coinbase, productID: "OLD-USD", baseAsset: "OLD",
                                              quoteAsset: "USD", provenance: .userConfirmedTickerMatch)
                 try model.addItem(WatchItem(id: id, coinGeckoID: "old", symbol: "OLD", name: "Old",
-                                            binanceMapping: nil, coinbaseMapping: original, alert: nil))
+                                            mapping: original, alert: nil))
                 for _ in 0..<100 {
                     if (await transport.pendingPaths()).contains(where: { $0.hasSuffix("/stats") }) { break }
                     await Task.yield()
@@ -717,7 +760,7 @@ struct BitPriceTests {
                     "Coinbase quote request was not held"
                 )
                 try model.commitEdit { draft in
-                    draft.items[0].coinbaseMapping = VenueMapping(
+                    draft.items[0].mapping = VenueMapping(
                         exchange: .coinbase, productID: "NEW-USD", baseAsset: "NEW", quoteAsset: "USD",
                         provenance: .userConfirmedTickerMatch
                     )
@@ -821,7 +864,7 @@ struct BitPriceTests {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
                 let store = try PersistenceStore(rootDirectory: root)
-                try store.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil))
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
                 let lock = try ProcessLock(rootDirectory: root)
                 let delayed = DelayedHTTPTransport()
                 let parts = controllerParts()
@@ -836,7 +879,7 @@ struct BitPriceTests {
                 let originalMapping = VenueMapping(exchange: .binance, productID: "OLDUSDT", baseAsset: "OLD",
                                                    quoteAsset: "USDT", provenance: .userConfirmedTickerMatch)
                 let item = WatchItem(id: id, coinGeckoID: "old", symbol: "OLD", name: "Old",
-                                     binanceMapping: originalMapping, coinbaseMapping: nil, alert: nil)
+                                     mapping: originalMapping, alert: nil)
                 try model.addItem(item)
                 for _ in 0..<100 {
                     if await delayed.pendingCount() > 0 { break }
@@ -847,7 +890,7 @@ struct BitPriceTests {
                 try model.commitEdit { draft in
                     let replacement = VenueMapping(exchange: .binance, productID: "NEWUSDT", baseAsset: "NEW",
                                                    quoteAsset: "USDT", provenance: .userConfirmedTickerMatch)
-                    draft.items[0].binanceMapping = replacement
+                    draft.items[0].mapping = replacement
                 }
                 await delayed.completeFirst(response(body: Data(#"[]"#.utf8)))
                 await Task.yield(); await Task.yield()
@@ -1108,7 +1151,7 @@ struct BitPriceTests {
                                        hysteresisPercent: 0, isEnabled: true, isArmed: true, lastFiredAt: nil)
                 try model.saveAlert(itemID: item.id, proposed: alert)
                 await Task.yield()
-                model.feedDidAccept(BinanceTick(
+                model.feedDidAccept(PriceTick(
                     productID: "BTCUSDT", price: 11, changePercent: 1,
                     eventDate: wall.now(), receivedInstant: FixedContinuousClock().now()
                 ))
@@ -1154,7 +1197,7 @@ struct BitPriceTests {
                     )
                 )
                 try model.setAlertsEnabled(false)
-                model.feedDidAccept(BinanceTick(
+                model.feedDidAccept(PriceTick(
                     productID: "BTCUSDT",
                     price: 11,
                     changePercent: 1,
@@ -1167,7 +1210,7 @@ struct BitPriceTests {
                            "disabled alert evaluation changed latch state")
 
                 try model.setAlertsEnabled(true)
-                model.feedDidAccept(BinanceTick(
+                model.feedDidAccept(PriceTick(
                     productID: "BTCUSDT",
                     price: 11,
                     changePercent: 1,
@@ -1204,7 +1247,7 @@ struct BitPriceTests {
                     observeSleepWake: false
                 )
                 try expect(model.menuBarTitle == "BitPrice", "menu title without a primary quote")
-                model.feedDidAccept(BinanceTick(
+                model.feedDidAccept(PriceTick(
                     productID: "BTCUSDT",
                     price: Decimal(string: "63928.65")!,
                     changePercent: Decimal(string: "1.34")!,
@@ -1223,7 +1266,7 @@ struct BitPriceTests {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
                 let store = try PersistenceStore(rootDirectory: root)
-                try store.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil))
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
                 let model = AppModel(
                     persistenceStore: store, processLock: try ProcessLock(rootDirectory: root),
                     restClients: clients(transport: StubHTTPTransport([])),
@@ -1236,15 +1279,15 @@ struct BitPriceTests {
                 let secondID = UUID()
                 try model.addItem(WatchItem(
                     id: firstID, coinGeckoID: "bitcoin", symbol: "BTC", name: "Bitcoin",
-                    binanceMapping: VenueMapping(exchange: .binance, productID: "BTCUSDT", baseAsset: "BTC",
-                                                 quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
-                    coinbaseMapping: nil, alert: nil
+                    mapping: VenueMapping(exchange: .binance, productID: "BTCUSDT", baseAsset: "BTC",
+                                          quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    alert: nil
                 ))
                 try model.addItem(WatchItem(
                     id: secondID, coinGeckoID: "ethereum", symbol: "ETH", name: "Ethereum",
-                    binanceMapping: VenueMapping(exchange: .binance, productID: "ETHUSDT", baseAsset: "ETH",
-                                                 quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
-                    coinbaseMapping: nil, alert: nil
+                    mapping: VenueMapping(exchange: .binance, productID: "ETHUSDT", baseAsset: "ETH",
+                                          quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    alert: nil
                 ))
                 try expect(model.primaryItemID == firstID, "the first added item did not become primary")
 
@@ -1258,7 +1301,7 @@ struct BitPriceTests {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
                 let store = try PersistenceStore(rootDirectory: root)
-                try store.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil))
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
                 let model = AppModel(
                     persistenceStore: store, processLock: try ProcessLock(rootDirectory: root),
                     restClients: clients(transport: StubHTTPTransport([])),
@@ -1270,11 +1313,11 @@ struct BitPriceTests {
                 let id = UUID()
                 try model.addItem(WatchItem(
                     id: id, coinGeckoID: "bitcoin", symbol: "BTC", name: "Bitcoin",
-                    binanceMapping: VenueMapping(exchange: .binance, productID: "BTCUSDT", baseAsset: "BTC",
-                                                 quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
-                    coinbaseMapping: nil, alert: nil
+                    mapping: VenueMapping(exchange: .binance, productID: "BTCUSDT", baseAsset: "BTC",
+                                          quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    alert: nil
                 ))
-                model.feedDidAccept(BinanceTick(
+                model.feedDidAccept(PriceTick(
                     productID: "BTCUSDT",
                     price: Decimal(string: "63928.65")!,
                     changePercent: Decimal(string: "1.34")!,
@@ -1291,6 +1334,34 @@ struct BitPriceTests {
                 // must not print a price for a coin that is no longer watched.
                 try expect(model.menuBarTitle == "BitPrice",
                            "the menu bar kept the price of a deleted coin")
+                model.shutdown()
+            },
+            AcceptanceTest(name: "22g polling disclosure is derived from source liveness") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
+                let model = AppModel(
+                    persistenceStore: store, processLock: try ProcessLock(rootDirectory: root),
+                    restClients: clients(transport: StubHTTPTransport([])),
+                    feedController: controllerParts().controller, notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
+                    continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false, observeSleepWake: false
+                )
+                // Both the add-coin candidate list and the alert editor show a
+                // "polls every N seconds and can miss a brief breach" line, and
+                // both decide whether to show it by pattern-matching this value.
+                // Before the PriceSource change the alert editor printed that
+                // sentence unconditionally, naming Coinbase even for a Binance
+                // market, so these two expectations are what keep the sentence
+                // attached to the venue it actually describes.
+                try expect(model.sourceLiveness(for: .binance) == .push,
+                           "Binance stopped reporting a push feed, so the alert editor would claim it polls")
+                try expect(model.sourceLiveness(for: .coinbase) == .polled(seconds: 60),
+                           "Coinbase stopped reporting a 60-second poll, so its missed-breach caveat would vanish")
+                try expect(model.configuredSourceNames == "Binance or Coinbase",
+                           "the no-market message no longer names the configured sources")
                 model.shutdown()
             },
             AcceptanceTest(name: "22b chart axis calculations") {

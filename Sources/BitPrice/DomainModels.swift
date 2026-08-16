@@ -1,6 +1,6 @@
 import Foundation
 
-let currentSchemaVersion = 1
+let currentSchemaVersion = 2
 let maximumWatchlistCount = 25
 let maximumCombinedStreamURLBytes = 2_048
 let maximumHTTPBodyBytes = 64 * 1_024 * 1_024
@@ -9,6 +9,11 @@ let maximumWebSocketMessageBytes = 1 * 1_024 * 1_024
 enum Venue: String, Codable, Sendable, CaseIterable {
     case binance
     case coinbase
+}
+
+enum SourceLiveness: Equatable, Sendable {
+    case push
+    case polled(seconds: Int)
 }
 
 enum MappingProvenance: String, Codable, Sendable {
@@ -89,8 +94,7 @@ struct WatchItem: Codable, Equatable, Identifiable, Sendable {
     let coinGeckoID: String
     var symbol: String
     var name: String
-    var binanceMapping: VenueMapping?
-    var coinbaseMapping: VenueMapping?
+    var mapping: VenueMapping?
     var alert: PriceAlert?
 }
 
@@ -112,20 +116,12 @@ struct PersistedState: Codable, Equatable, Sendable {
             quoteAsset: "USDT",
             provenance: .builtInBTC
         )
-        let coinbase = VenueMapping(
-            exchange: .coinbase,
-            productID: "BTC-USD",
-            baseAsset: "BTC",
-            quoteAsset: "USD",
-            provenance: .builtInBTC
-        )
         let item = WatchItem(
             id: id,
             coinGeckoID: "bitcoin",
             symbol: "BTC",
             name: "Bitcoin",
-            binanceMapping: binance,
-            coinbaseMapping: coinbase,
+            mapping: binance,
             alert: nil
         )
         return PersistedState(
@@ -216,7 +212,7 @@ enum QuoteChange: Equatable, Sendable {
     case unavailable
 }
 
-struct BinanceTick: Equatable, Sendable {
+struct PriceTick: Equatable, Sendable {
     let productID: String
     let price: Decimal
     let changePercent: Decimal
@@ -263,7 +259,7 @@ struct NetworkFailure: Error, Equatable, Sendable, CustomStringConvertible {
     }
 }
 
-enum BinanceLifecycle: Equatable, Sendable {
+enum FeedLifecycle: Equatable, Sendable {
     case stopped
     case connecting
     case connected
@@ -330,9 +326,23 @@ enum VenueCandidateOrdering {
     }
 }
 
-struct CoinbaseQuoteValue: Equatable, Sendable {
+struct SourceQuote: Equatable, Sendable {
     let price: Decimal
     let change: QuoteChange
+}
+
+protocol PriceSource: Sendable {
+    var venue: Venue { get }
+    var liveness: SourceLiveness { get }
+    func candidates(symbol: String) async throws -> [VenueCandidate]
+    func quote(productID: String) async throws -> SourceQuote
+    func candles(
+        productID: String,
+        range: ChartRange,
+        start: Date,
+        end: Date
+    ) async throws -> [CandlePoint]
+    func supports(_ range: ChartRange) -> Bool
 }
 
 struct HTTPResponseData: Sendable {
@@ -362,9 +372,9 @@ protocol RequestPacer: Sendable {
 }
 
 @MainActor
-protocol BinanceFeedSink: AnyObject {
-    func feedDidAccept(_ tick: BinanceTick)
-    func feedStateDidChange(_ state: BinanceLifecycle)
+protocol PriceFeedSink: AnyObject {
+    func feedDidAccept(_ tick: PriceTick)
+    func feedStateDidChange(_ state: FeedLifecycle)
 }
 
 enum WebSocketInboundMessage: Sendable {
@@ -482,13 +492,12 @@ func validatePersistedState(_ state: PersistedState) throws {
     guard Set(state.items.map(\.id)).count == state.items.count else {
         throw ValidationFailure.invalid("Duplicate item UUID")
     }
-    let binanceIDs = state.items.compactMap(\.binanceMapping?.productID)
-    let coinbaseIDs = state.items.compactMap(\.coinbaseMapping?.productID)
-    guard Set(binanceIDs).count == binanceIDs.count else {
-        throw ValidationFailure.invalid("Duplicate Binance product ID")
-    }
-    guard Set(coinbaseIDs).count == coinbaseIDs.count else {
-        throw ValidationFailure.invalid("Duplicate Coinbase product ID")
+    let mappingsByVenue = Dictionary(grouping: state.items.compactMap(\.mapping), by: \.exchange)
+    for venue in Venue.allCases {
+        let productIDs = mappingsByVenue[venue, default: []].map(\.productID)
+        guard Set(productIDs).count == productIDs.count else {
+            throw ValidationFailure.invalid("Duplicate \(venue.rawValue.capitalized) product ID")
+        }
     }
     if state.items.isEmpty {
         guard state.primaryItemID == nil else { throw ValidationFailure.invalid("Empty watchlist has a primary item") }
@@ -503,24 +512,20 @@ func validatePersistedState(_ state: PersistedState) throws {
               !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ValidationFailure.invalid("Item identity fields must not be empty")
         }
-        guard item.binanceMapping != nil || item.coinbaseMapping != nil else {
+        guard let mapping = item.mapping else {
             throw ValidationFailure.invalid("Every item needs a venue mapping")
         }
-        try validateMapping(item.binanceMapping, expectedVenue: .binance)
-        try validateMapping(item.coinbaseMapping, expectedVenue: .coinbase)
+        try validateMapping(mapping)
         if let alert = item.alert { try validateAlert(alert) }
     }
+    let binanceIDs = mappingsByVenue[.binance, default: []].map(\.productID)
     if let url = binanceCombinedStreamURL(productIDs: Set(binanceIDs)),
        url.absoluteString.utf8.count > maximumCombinedStreamURLBytes {
         throw ValidationFailure.invalid("The Binance combined-stream URL exceeds \(maximumCombinedStreamURLBytes) bytes")
     }
 }
 
-private func validateMapping(_ mapping: VenueMapping?, expectedVenue: Venue) throws {
-    guard let mapping else { return }
-    guard mapping.exchange == expectedVenue else {
-        throw ValidationFailure.invalid("Mapping exchange does not match its venue property")
-    }
+private func validateMapping(_ mapping: VenueMapping) throws {
     guard !mapping.productID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           !mapping.baseAsset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           !mapping.quoteAsset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

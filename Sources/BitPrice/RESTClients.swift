@@ -364,7 +364,7 @@ actor RESTClients {
         })
     }
 
-    func coinbaseStats(productID: String) async throws -> CoinbaseQuoteValue {
+    func coinbaseStats(productID: String) async throws -> SourceQuote {
         try await coinbasePacer.acquire(priority: .quote, cost: 1)
         let response = try await load(url: try coinbaseURL(productID: productID, suffix: "stats"), priority: .quote)
         if response.statusCode == 429 {
@@ -377,9 +377,9 @@ actor RESTClients {
         }
         guard let rawOpen = stats.open,
               let open = finiteDecimal(from: rawOpen), open > 0 else {
-            return CoinbaseQuoteValue(price: last, change: .unavailable)
+            return SourceQuote(price: last, change: .unavailable)
         }
-        return CoinbaseQuoteValue(price: last, change: .percent((last - open) / open * 100))
+        return SourceQuote(price: last, change: .percent((last - open) / open * 100))
     }
 
     func binanceCandles(productID: String, range: ChartRange, start: Date, end: Date) async throws -> [CandlePoint] {
@@ -505,4 +505,77 @@ actor RESTClients {
         formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
         return formatter
     }()
+}
+
+struct BinancePriceSource: PriceSource {
+    let venue = Venue.binance
+    let liveness = SourceLiveness.push
+    private let clients: RESTClients
+
+    init(clients: RESTClients) {
+        self.clients = clients
+    }
+
+    func candidates(symbol: String) async throws -> [VenueCandidate] {
+        try await clients.binanceCandidates(symbol: symbol)
+    }
+
+    func quote(productID: String) async throws -> SourceQuote {
+        throw NetworkFailure(
+            domain: venue.rawValue,
+            code: -5,
+            message: "Binance quotes arrive through its push feed"
+        )
+    }
+
+    func candles(
+        productID: String,
+        range: ChartRange,
+        start: Date,
+        end: Date
+    ) async throws -> [CandlePoint] {
+        try await clients.binanceCandles(productID: productID, range: range, start: start, end: end)
+    }
+
+    func supports(_ range: ChartRange) -> Bool {
+        true
+    }
+}
+
+struct CoinbasePriceSource: PriceSource {
+    let venue = Venue.coinbase
+    let liveness = SourceLiveness.polled(seconds: 60)
+    private let clients: RESTClients
+
+    init(clients: RESTClients) {
+        self.clients = clients
+    }
+
+    func candidates(symbol: String) async throws -> [VenueCandidate] {
+        try await clients.coinbaseCandidates(symbol: symbol)
+    }
+
+    func quote(productID: String) async throws -> SourceQuote {
+        try await clients.coinbaseStats(productID: productID)
+    }
+
+    func candles(
+        productID: String,
+        range: ChartRange,
+        start: Date,
+        end: Date
+    ) async throws -> [CandlePoint] {
+        try await clients.coinbaseCandles(productID: productID, range: range, start: start, end: end)
+    }
+
+    func supports(_ range: ChartRange) -> Bool {
+        true
+    }
+}
+
+func configuredPriceSources(clients: RESTClients) -> [any PriceSource] {
+    [
+        BinancePriceSource(clients: clients),
+        CoinbasePriceSource(clients: clients)
+    ]
 }

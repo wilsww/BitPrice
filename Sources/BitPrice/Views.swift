@@ -1583,7 +1583,7 @@ private struct AddCoinView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
             } else if candidates.isEmpty {
-                Text("No market was found on Binance or Coinbase for this ticker.")
+                Text("No market was found on \(model.configuredSourceNames) for this ticker.")
                     .panelFont(.body)
                     .foregroundStyle(.secondary)
                 Button("Back to search") {
@@ -1604,8 +1604,9 @@ private struct AddCoinView: View {
                 Text("The selected market is the only price source; if its feed stops, this row stops updating and alerts cannot fire.")
                     .panelFont(.body)
                     .foregroundStyle(.secondary)
-                if candidates.first(where: { $0.id == selectedCandidate })?.venue == .coinbase {
-                    Text("Coinbase polling runs every 60 seconds and can miss a brief alert breach.")
+                if let venue = candidates.first(where: { $0.id == selectedCandidate })?.venue,
+                   case .polled(let seconds) = model.sourceLiveness(for: venue) {
+                    Text("\(venue.rawValue.capitalized) polling runs every \(seconds) seconds and can miss a brief alert breach.")
                         .panelFont(.body)
                         .foregroundStyle(.secondary)
                 }
@@ -1728,8 +1729,7 @@ private struct AddCoinView: View {
         let mapping = mapping(candidate)
         let item = WatchItem(
             id: UUID(), coinGeckoID: result.id, symbol: result.symbol.uppercased(), name: result.name,
-            binanceMapping: candidate.venue == .binance ? mapping : nil,
-            coinbaseMapping: candidate.venue == .coinbase ? mapping : nil,
+            mapping: mapping,
             alert: nil
         )
         do {
@@ -1804,8 +1804,11 @@ private struct AlertEditorView: View {
                 Text("Currently disarmed — it already fired and is waiting for the re-arm price above.")
                     .panelFont(.body).foregroundStyle(.orange)
             }
-            Text("Coinbase polls every 60 seconds and can miss a brief breach.")
-                .panelFont(.body).foregroundStyle(.secondary)
+            if let venue = item.mapping?.exchange,
+               case .polled(let seconds) = model.sourceLiveness(for: venue) {
+                Text("\(venue.rawValue.capitalized) polls every \(seconds) seconds and can miss a brief breach.")
+                    .panelFont(.body).foregroundStyle(.secondary)
+            }
             if let localError { Text(localError).panelFont(.body).foregroundStyle(.red) }
             Spacer()
             HStack {

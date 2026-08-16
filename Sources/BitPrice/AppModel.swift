@@ -10,14 +10,14 @@ enum RequestActivity: Equatable, Sendable {
 }
 
 @MainActor
-final class AppModel: ObservableObject, BinanceFeedSink {
+final class AppModel: ObservableObject, PriceFeedSink {
     @Published private(set) var persistedState: PersistedState
     @Published private(set) var quotes: [UUID: Quote] = [:]
     @Published private(set) var charts: [UUID: ChartSeries] = [:]
-    @Published private(set) var connectionState: BinanceLifecycle = .stopped
+    @Published private(set) var connectionState: FeedLifecycle = .stopped
     @Published private(set) var searchResults: [SearchResult] = []
     @Published private(set) var searchActivity: RequestActivity = .idle
-    @Published private(set) var coinbaseActivity: [UUID: RequestActivity] = [:]
+    @Published private(set) var sourceActivity: [UUID: RequestActivity] = [:]
     @Published private(set) var lastError: String?
     @Published private(set) var recoveryMessage: String?
     @Published private(set) var freshnessPulse = false
@@ -25,6 +25,8 @@ final class AppModel: ObservableObject, BinanceFeedSink {
     let persistenceStore: PersistenceStore
     private let processLock: ProcessLock
     private let restClients: RESTClients
+    private let priceSources: [any PriceSource]
+    private let priceSourcesByVenue: [Venue: any PriceSource]
     private let feedController: BinanceFeedController
     private let notifications: any NotificationSubmitting
     private let wallClock: any WallClock
@@ -33,13 +35,13 @@ final class AppModel: ObservableObject, BinanceFeedSink {
 
     private var persistenceMode: PersistenceMode = .writable
     private var marketRevisions: [UUID: UInt64] = [:]
-    private var coinbaseRequestIDs: [UUID: UUID] = [:]
+    private var quoteRequestIDs: [UUID: UUID] = [:]
     private var chartTokens: [UUID: ChartRequestToken] = [:]
-    private var coinbaseTasks: [UUID: Task<Void, Never>] = [:]
+    private var quoteTasks: [UUID: Task<Void, Never>] = [:]
     private var chartTasks: [UUID: Task<Void, Never>] = [:]
     private var searchTask: Task<Void, Never>?
     private var searchRequestID: UUID?
-    private var coinbaseLoop: Task<Void, Never>?
+    private var quoteLoops: [Venue: Task<Void, Never>] = [:]
     private var candleLoop: Task<Void, Never>?
     private var freshnessLoop: Task<Void, Never>?
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -59,6 +61,7 @@ final class AppModel: ObservableObject, BinanceFeedSink {
         persistenceStore: PersistenceStore,
         processLock: ProcessLock,
         restClients: RESTClients,
+        priceSources: [any PriceSource]? = nil,
         feedController: BinanceFeedController,
         notifications: any NotificationSubmitting,
         wallClock: any WallClock,
@@ -71,6 +74,9 @@ final class AppModel: ObservableObject, BinanceFeedSink {
         self.persistenceStore = persistenceStore
         self.processLock = processLock
         self.restClients = restClients
+        let sources = priceSources ?? configuredPriceSources(clients: restClients)
+        self.priceSources = sources
+        self.priceSourcesByVenue = Dictionary(sources.map { ($0.venue, $0) }, uniquingKeysWith: { first, _ in first })
         self.feedController = feedController
         self.notifications = notifications
         self.wallClock = wallClock
@@ -181,7 +187,7 @@ final class AppModel: ObservableObject, BinanceFeedSink {
             draft.items.append(item)
             if draft.primaryItemID == nil { draft.primaryItemID = item.id }
         }
-        requestCoinbaseQuoteIfNeeded(itemID: item.id)
+        requestQuoteIfNeeded(itemID: item.id)
         refreshChart(itemID: item.id)
     }
 
@@ -324,22 +330,30 @@ final class AppModel: ObservableObject, BinanceFeedSink {
 
     func loadCandidates(for result: SearchResult) async -> Result<[VenueCandidate], NetworkFailure> {
         do {
-            async let binance = restClients.binanceCandidates(symbol: result.symbol)
-            async let coinbase = restClients.coinbaseCandidates(symbol: result.symbol)
-            return .success(VenueCandidateOrdering.sorted(try await binance + coinbase))
+            let candidates = try await withThrowingTaskGroup(of: [VenueCandidate].self) { group in
+                for source in priceSources {
+                    group.addTask { try await source.candidates(symbol: result.symbol) }
+                }
+                var combined: [VenueCandidate] = []
+                for try await values in group { combined.append(contentsOf: values) }
+                return combined
+            }
+            return .success(VenueCandidateOrdering.sorted(candidates))
         } catch {
             return .failure(NetworkFailure.wrapping(error))
         }
     }
 
-    func feedDidAccept(_ tick: BinanceTick) {
-        guard let item = persistedState.items.first(where: { $0.binanceMapping?.productID == tick.productID }) else { return }
+    func feedDidAccept(_ tick: PriceTick) {
+        guard let item = persistedState.items.first(where: {
+            $0.mapping?.exchange == .binance && $0.mapping?.productID == tick.productID
+        }), let mapping = item.mapping else { return }
         marketRevisions[item.id, default: 0] &+= 1
         let quote = Quote(
             itemID: item.id,
             price: tick.price,
             change: .percent(tick.changePercent),
-            source: .binance,
+            source: mapping.exchange,
             eventDate: tick.eventDate,
             receivedInstant: tick.receivedInstant
         )
@@ -349,7 +363,7 @@ final class AppModel: ObservableObject, BinanceFeedSink {
         if !hadQuote { refreshChart(itemID: item.id) }
     }
 
-    func feedStateDidChange(_ state: BinanceLifecycle) {
+    func feedStateDidChange(_ state: FeedLifecycle) {
         connectionState = state
     }
 
@@ -364,7 +378,7 @@ final class AppModel: ObservableObject, BinanceFeedSink {
     func handleWake() {
         freshnessPulse.toggle()
         feedController.resumeAfterWake()
-        pollCoinbaseQuotes()
+        pollQuotes()
         refreshAllCharts()
         reconcilePeriodicLoops()
     }
@@ -383,31 +397,42 @@ final class AppModel: ObservableObject, BinanceFeedSink {
     }
 
     func quoteAsset(for item: WatchItem) -> String {
-        if let mapping = item.binanceMapping { return mapping.quoteAsset }
-        return item.coinbaseMapping?.quoteAsset ?? ""
+        item.mapping?.quoteAsset ?? ""
+    }
+
+    func sourceLiveness(for venue: Venue) -> SourceLiveness? {
+        priceSourcesByVenue[venue]?.liveness
+    }
+
+    var configuredSourceNames: String {
+        let names = priceSources.map { $0.venue.rawValue.capitalized }
+        guard let last = names.last else { return "configured sources" }
+        if names.count == 1 { return last }
+        return names.dropLast().joined(separator: ", ") + " or " + last
     }
 
     func rowPresentation(for item: WatchItem) -> ConnectionPresentation {
-        guard let source = primaryVenue(for: item) else { return .offline }
+        guard let source = primaryVenue(for: item),
+              let liveness = sourceLiveness(for: source) else { return .offline }
         if let quote = quotes[item.id] {
-            // A 60-second poll plus request latency can approach the Binance
-            // window; retaining 120 seconds avoids marking a normal Coinbase
+            // A 60-second poll plus request latency can approach the push-feed
+            // window; retaining 120 seconds avoids marking a normal polling
             // cycle stale while preserving the existing freshness semantics.
             let fresh = continuousClock.now().seconds(since: quote.receivedInstant) <= 120
             guard quote.source == source else { return .stale }
-            switch source {
-            case .binance:
+            switch liveness {
+            case .push:
                 return fresh && connectionState == .connected ? .live : .stale
-            case .coinbase:
+            case .polled:
                 return fresh ? .live : .stale
             }
         }
-        switch source {
-        case .binance:
+        switch liveness {
+        case .push:
             if connectionState == .connecting || connectionState == .connected { return .stale }
             return .offline
-        case .coinbase:
-            return coinbaseActivity[item.id] == .requesting ? .stale : .offline
+        case .polled:
+            return sourceActivity[item.id] == .requesting ? .stale : .offline
         }
     }
 
@@ -453,24 +478,28 @@ final class AppModel: ObservableObject, BinanceFeedSink {
     private func startNetworkWork() {
         feedController.replaceProducts(binanceProductIDs(in: persistedState))
         guard !persistedState.items.isEmpty else { return }
-        pollCoinbaseQuotes()
+        pollQuotes()
         refreshAllCharts()
         reconcilePeriodicLoops()
     }
 
     private func reconcilePeriodicLoops() {
         guard !items.isEmpty else {
-            coinbaseLoop?.cancel(); coinbaseLoop = nil
+            quoteLoops.values.forEach { $0.cancel() }; quoteLoops.removeAll()
             candleLoop?.cancel(); candleLoop = nil
             freshnessLoop?.cancel(); freshnessLoop = nil
             return
         }
-        if coinbaseLoop == nil {
-            coinbaseLoop = Task { @MainActor [weak self] in
+        for source in priceSources {
+            guard case .polled(let seconds) = source.liveness,
+                  seconds > 0,
+                  quoteLoops[source.venue] == nil else { continue }
+            let venue = source.venue
+            quoteLoops[venue] = Task { @MainActor [weak self] in
                 guard let self else { return }
                 while !Task.isCancelled {
-                    do { try await self.suspendingClock.sleep(for: 60) } catch { return }
-                    self.pollCoinbaseQuotes()
+                    do { try await self.suspendingClock.sleep(for: TimeInterval(seconds)) } catch { return }
+                    self.pollQuotes(from: venue)
                 }
             }
         }
@@ -494,49 +523,56 @@ final class AppModel: ObservableObject, BinanceFeedSink {
         }
     }
 
-    private func pollCoinbaseQuotes() {
-        for item in items where primaryVenue(for: item) == .coinbase {
-            requestCoinbaseQuoteIfNeeded(itemID: item.id)
+    private func pollQuotes() {
+        for source in priceSources where source.liveness != .push {
+            pollQuotes(from: source.venue)
         }
     }
 
-    private func requestCoinbaseQuoteIfNeeded(itemID: UUID) {
-        guard coinbaseTasks[itemID] == nil,
+    private func pollQuotes(from venue: Venue) {
+        for item in items where primaryVenue(for: item) == venue {
+            requestQuoteIfNeeded(itemID: item.id)
+        }
+    }
+
+    private func requestQuoteIfNeeded(itemID: UUID) {
+        guard quoteTasks[itemID] == nil,
               let item = items.first(where: { $0.id == itemID }),
-              primaryVenue(for: item) == .coinbase,
-              let productID = item.coinbaseMapping?.productID else { return }
+              let mapping = item.mapping,
+              let source = priceSourcesByVenue[mapping.exchange],
+              case .polled = source.liveness else { return }
 
         let revision = marketRevisions[itemID, default: 0]
         let requestID = UUID()
-        coinbaseRequestIDs[itemID] = requestID
-        coinbaseActivity[itemID] = .requesting
-        coinbaseTasks[itemID] = Task { @MainActor [weak self] in
+        quoteRequestIDs[itemID] = requestID
+        sourceActivity[itemID] = .requesting
+        quoteTasks[itemID] = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
-                if self.coinbaseRequestIDs[itemID] == requestID {
-                    self.coinbaseTasks[itemID] = nil
-                    self.coinbaseRequestIDs[itemID] = nil
+                if self.quoteRequestIDs[itemID] == requestID {
+                    self.quoteTasks[itemID] = nil
+                    self.quoteRequestIDs[itemID] = nil
                 }
             }
             do {
-                let value = try await self.restClients.coinbaseStats(productID: productID)
+                let value = try await source.quote(productID: mapping.productID)
                 guard !Task.isCancelled,
-                      self.coinbaseRequestIDs[itemID] == requestID,
+                      self.quoteRequestIDs[itemID] == requestID,
                       let current = self.items.first(where: { $0.id == itemID }),
-                      self.primaryVenue(for: current) == .coinbase,
-                      current.coinbaseMapping?.productID == productID,
+                      current.mapping?.exchange == source.venue,
+                      current.mapping?.productID == mapping.productID,
                       self.marketRevisions[itemID, default: 0] == revision else { return }
                 let completed = self.continuousClock.now()
                 let quote = Quote(
-                    itemID: itemID, price: value.price, change: value.change, source: .coinbase,
+                    itemID: itemID, price: value.price, change: value.change, source: source.venue,
                     eventDate: self.wallClock.now(), receivedInstant: completed
                 )
                 self.quotes[itemID] = quote
-                self.coinbaseActivity[itemID] = .succeeded
+                self.sourceActivity[itemID] = .succeeded
                 self.evaluateAlert(item: current, quote: quote)
             } catch {
-                guard !Task.isCancelled, self.coinbaseRequestIDs[itemID] == requestID else { return }
-                self.coinbaseActivity[itemID] = .failed(NetworkFailure.wrapping(error).message)
+                guard !Task.isCancelled, self.quoteRequestIDs[itemID] == requestID else { return }
+                self.sourceActivity[itemID] = .failed(NetworkFailure.wrapping(error).message)
             }
         }
     }
@@ -546,31 +582,23 @@ final class AppModel: ObservableObject, BinanceFeedSink {
     }
 
     private func refreshChart(itemID: UUID) {
+        let range = persistedState.chartRange
         guard let item = items.first(where: { $0.id == itemID }),
-              let selection = chartSelection(for: item) else { return }
+              let selection = chartSelection(for: item, range: range) else { return }
         chartTasks[itemID]?.cancel()
         let end = wallClock.now()
-        let range = persistedState.chartRange
         let start = end.addingTimeInterval(-range.lookbackSeconds)
         let token = ChartRequestToken(
-            requestID: UUID(), itemID: itemID, venue: selection.venue, productID: selection.mapping.productID,
+            requestID: UUID(), itemID: itemID, venue: selection.source.venue, productID: selection.mapping.productID,
             range: range, marketRevision: marketRevisions[itemID, default: 0], requestedStart: start, requestedEnd: end
         )
         chartTokens[itemID] = token
         chartTasks[itemID] = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let points: [CandlePoint]
-                switch token.venue {
-                case .binance:
-                    points = try await self.restClients.binanceCandles(
-                        productID: token.productID, range: token.range, start: start, end: end
-                    )
-                case .coinbase:
-                    points = try await self.restClients.coinbaseCandles(
-                        productID: token.productID, range: token.range, start: start, end: end
-                    )
-                }
+                let points = try await selection.source.candles(
+                    productID: token.productID, range: token.range, start: start, end: end
+                )
                 guard self.chartTokens[itemID] == token,
                       self.chartTokenStillMatches(token),
                       self.marketRevisions[itemID, default: 0] == token.marketRevision else { return }
@@ -594,22 +622,24 @@ final class AppModel: ObservableObject, BinanceFeedSink {
         }
     }
 
-    private func chartSelection(for item: WatchItem) -> (venue: Venue, mapping: VenueMapping)? {
-        if let mapping = item.binanceMapping { return (.binance, mapping) }
-        if let mapping = item.coinbaseMapping { return (.coinbase, mapping) }
-        return nil
+    private func chartSelection(
+        for item: WatchItem,
+        range: ChartRange
+    ) -> (source: any PriceSource, mapping: VenueMapping)? {
+        guard let mapping = item.mapping,
+              let source = priceSourcesByVenue[mapping.exchange],
+              source.supports(range) else { return nil }
+        return (source, mapping)
     }
 
     private func primaryVenue(for item: WatchItem) -> Venue? {
-        if item.binanceMapping != nil { return .binance }
-        if item.coinbaseMapping != nil { return .coinbase }
-        return nil
+        item.mapping?.exchange
     }
 
     private func chartTokenStillMatches(_ token: ChartRequestToken) -> Bool {
         guard let item = items.first(where: { $0.id == token.itemID }) else { return false }
-        let mapping = token.venue == .binance ? item.binanceMapping : item.coinbaseMapping
-        return mapping?.productID == token.productID &&
+        return item.mapping?.exchange == token.venue &&
+            item.mapping?.productID == token.productID &&
             token.range == persistedState.chartRange &&
             token.requestedStart < token.requestedEnd
     }
@@ -668,42 +698,45 @@ final class AppModel: ObservableObject, BinanceFeedSink {
                 clearRuntime(itemID: oldItem.id)
                 continue
             }
-            if oldItem.binanceMapping != newItem.binanceMapping || oldItem.coinbaseMapping != newItem.coinbaseMapping {
+            if oldItem.mapping != newItem.mapping {
                 clearRuntime(itemID: oldItem.id)
                 marketRevisions[oldItem.id, default: 0] &+= 1
                 mappingChanged = true
             }
         }
         for item in newState.items where marketRevisions[item.id] == nil { marketRevisions[item.id] = 0 }
-        if mappingChanged { pollCoinbaseQuotes() }
+        if mappingChanged { pollQuotes() }
     }
 
     private func clearRuntime(itemID: UUID) {
-        coinbaseTasks[itemID]?.cancel()
-        coinbaseTasks[itemID] = nil
-        coinbaseRequestIDs[itemID] = nil
+        quoteTasks[itemID]?.cancel()
+        quoteTasks[itemID] = nil
+        quoteRequestIDs[itemID] = nil
         chartTasks[itemID]?.cancel()
         chartTasks[itemID] = nil
         chartTokens[itemID] = nil
         quotes[itemID] = nil
         charts[itemID] = nil
-        coinbaseActivity[itemID] = nil
+        sourceActivity[itemID] = nil
         marketRevisions[itemID] = nil
     }
 
     private func cancelRESTAndLoops() {
-        coinbaseTasks.values.forEach { $0.cancel() }
+        quoteTasks.values.forEach { $0.cancel() }
         chartTasks.values.forEach { $0.cancel() }
-        coinbaseTasks.removeAll(); coinbaseRequestIDs.removeAll()
-        for itemID in Array(coinbaseActivity.keys) { coinbaseActivity[itemID] = .idle }
+        quoteTasks.removeAll(); quoteRequestIDs.removeAll()
+        for itemID in Array(sourceActivity.keys) { sourceActivity[itemID] = .idle }
         chartTasks.removeAll(); chartTokens.removeAll()
-        coinbaseLoop?.cancel(); coinbaseLoop = nil
+        quoteLoops.values.forEach { $0.cancel() }; quoteLoops.removeAll()
         candleLoop?.cancel(); candleLoop = nil
         freshnessLoop?.cancel(); freshnessLoop = nil
     }
 
     private func binanceProductIDs(in state: PersistedState) -> Set<String> {
-        Set(state.items.compactMap { $0.binanceMapping?.productID })
+        Set(state.items.compactMap { item in
+            guard item.mapping?.exchange == .binance else { return nil }
+            return item.mapping?.productID
+        })
     }
 
     private func installSleepWakeObservers() {
