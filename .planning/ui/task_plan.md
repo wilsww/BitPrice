@@ -238,7 +238,9 @@ path that has already produced defects in this project, so it stays visible for
 whoever next has a reason to force a disconnection.
 
 ### Look for other price sources
-Raised 2026-08-16. Not yet evaluated.
+Raised 2026-08-16. **Surveyed 2026-08-16; recommendation is to add nothing.**
+The criteria below were written before the survey and are left as written; the
+measurements that answer them follow at the end of the entry.
 
 Binance and Coinbase are the only venues. Worth surveying what else could serve
 as a source — CoinMarketCap, OKX, AICoin, and whatever else the survey turns up.
@@ -275,6 +277,99 @@ to be exercised on a desktop against the live API. Two venues is already the
 larger part of `RESTClients`. A third should be justified by coins or markets
 the current two genuinely cannot reach, which is the first thing the survey
 should measure.
+
+---
+
+**Survey, 2026-08-16.** The cost paragraph above asked for the reachability
+measurement first, so that is what was done first, and it turned out to settle
+the question before the API comparison mattered.
+
+*What the current two already reach.* Both catalogues were fetched live —
+`api.binance.com/api/v3/exchangeInfo` filtered to `status == TRADING`, and
+`api.exchange.coinbase.com/products` filtered to online and not
+trading-disabled. Binance offers 1,371 pairs across 491 base assets, Coinbase
+517 pairs across 402. They overlap on 219 assets, so the union the app can
+reach today is **674 distinct base assets**. That number is the baseline every
+candidate has to beat.
+
+*What a third venue would add.* Five keyless spot catalogues were fetched the
+same way and differenced against that union. The raw counts look tempting until
+they are filtered for liquidity, which is the step that matters — an asset with
+no volume is a row a user can add and then watch sit still.
+
+| Venue | New base assets | Of those, >$1M 24h volume |
+|---|---|---|
+| Gate | 1,556 | 23 |
+| KuCoin | 386 | 28 |
+| Kraken | 261 | 4 |
+| OKX | 124 | 9 |
+| Bybit | 111 | 11 |
+
+Volume was taken from each venue's own 24h ticker endpoint, counting only
+USD/USDT/USDC quotes so the figures are comparable. Gate's 1,556 collapsing to
+23 is the whole story of that column: the long tail is almost entirely dormant
+listings.
+
+*The ceiling, not just the best single choice.* Unioning the liquid-new sets
+across all candidates gives **49 assets** — that is the most any third venue,
+or any number of them, could add. Inspecting the list shrinks it further:
+`ETH5L`, `SOL5L` and `WLD5S` are leveraged tokens rather than coins, `XBT` is
+Kraken's own name for BTC and is already reachable, `GBP` is fiat, and one
+entry is a Chinese-language name. What remains is roughly forty low-cap and
+meme tickers, of which exactly one is a coin most people could name: **XMR**
+(Monero, $38M/24h on KuCoin), delisted by both Binance and Coinbase, available
+on KuCoin and Kraken.
+
+*The API comparison, for the record.* It was run anyway, and would not have
+changed the outcome. KuCoin, OKX and Bybit each clear all three technical
+gates — public WebSocket ticker, base-asset-filterable catalogue, and 15m/6h/1d
+candles, the last verified by live request rather than from docs. Kraken fails
+the candle gate: `interval=360` returns `{"error":["EGeneral:Invalid
+arguments"]}`, so it has 4h and 1d but no 6h, and would force the range table
+to change. CoinGecko and CoinMarketCap both fail on candles at the free tier —
+CoinGecko gives auto-granularity only (30m/4h/4d by span, explicit intervals
+are paid) and CoinMarketCap serves no OHLCV at all on Basic. CryptoCompare now
+needs a key and has moved streaming behind an enterprise contract since the
+CoinDesk acquisition. Geography is worth noting for whoever revisits this:
+Bybit and OKX's global endpoints both block US access, which Binance already
+does too.
+
+*What comparable apps use.* Ten open-source tickers were surveyed — macOS menu
+bar, Linux panel extensions, and terminal apps — to see whether they converged
+on something this survey had missed. They did not converge on a third exchange.
+They split into two shapes. The larger group calls an **aggregator** rather than
+any exchange: CoinGecko in `miguelmota/cointop`, `Gituser143/cryptgo` and the
+GNOME `Crypto-Price-Tracker`, with CoinCap and CoinMarketCap appearing as
+alternates. The smaller group calls **exchange APIs directly**, which is what
+this app does — `AttackOnMorty/crypto-ticker` is Binance WebSocket only,
+`mqulateen/crypto-ticker-macOS` is Coinbase only, and two of the older projects
+(`alecananian/osx-coin-ticker`, `gnome-shell-bitcoin-markets`) instead let the
+user pick from a long exchange list. Two stock-first apps use Yahoo Finance,
+which is outside this app's scope, and one depends on an unofficial scraper
+host. Nothing in the sample suggests a fourth technical requirement the criteria
+above missed.
+
+*The aggregator question, which the repo survey raised and the API survey
+answered.* Aggregators are popular in that sample because most of those apps
+only need a number, not a chart. This app needs candles, and that is where
+aggregators fail. CoinGecko's keyless endpoint does work without a key —
+`/simple/price` and `/coins/{id}/ohlc` both answered on request — but the OHLC
+candles came back spaced **1,800 seconds apart** on a `days=1` request, which is
+the documented auto-granularity, not a choosable interval. 15m, 6h and 1d are
+paid-plan only, so it cannot serve `ChartRange` as written. CoinCap, cited by
+two repos in the sample, returned an empty body and appears to be gone. So the
+aggregator route is not an unexplored alternative — it is a route this app's
+chart requirement closes.
+
+*Conclusion.* Adding a venue costs a candidate fetcher, a quote path, a candle
+path, rate-limit pacing, and a desktop pass against the live API — the cost
+paragraph above lists them. The best available return on that is KuCoin's 28
+assets, of which one is recognisable. That does not clear the bar the same
+paragraph set, and the comparable-app survey found no fourth requirement and no
+better-shaped option. **Recommendation: stay at two venues.** The one specific
+thing that would reopen this is a request for Monero, which no amount of work on
+Binance or Coinbase can satisfy, since both have delisted it; KuCoin and Kraken
+both carry it, and of those two only KuCoin passes the 6h candle gate.
 
 ### Chart time range
 The chart is fixed to 24 hours. Evaluated 2026-08-15; decisions below.
