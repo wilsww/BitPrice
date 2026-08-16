@@ -228,8 +228,8 @@ Near-miss tickers are not made harder to spot — `BTC/USD1` separates itself fr
 `BTC/USD` more clearly than `BTCUSD1` did, because the slash marks where the
 quote asset begins.
 
-### The four screens do not lay out their buttons the same way
-Raised 2026-08-16. Settings was designed deliberately in ui24; Add coin and the
+### The four screens do not lay out their buttons the same way — DONE 2026-08-16
+Raised 2026-08-16, landed as ui29 the same day. Settings was designed deliberately in ui24; Add coin and the
 Alert editor were built before that and their layout was never revisited against
 it. The result is three screens that each answer the same questions differently.
 
@@ -287,6 +287,38 @@ sizes while the type does not. Extracting a card container must not change the
 height of that content. Settings needs re-checking on the desktop at **Small and
 Extra Large** specifically, not at whatever size happens to be set.
 
+**Outcome.** Implemented by Codex on the same thread and reviewed here. The three
+helpers landed as `panelHeader(title:leading:)`, `panelCard` and
+`panelActionBar(alignment:controlSize:)`, all three screens were converted, and
+the trailing-slot rule was applied throughout. Verified on the desktop at Small
+and Extra Large: Settings is unchanged apart from Quit's move to the leading
+edge, and nothing is clipped at either size.
+
+Three defects were caught in review rather than by the tests, which is worth
+recording because none of them would have failed a build:
+
+- **The footer `Spacer` stayed at the trailing end** when Quit moved to the
+  leading edge, so the closing disclosure was pushed against the button with the
+  panel's whole right side left empty. Quit was in the right place and the row
+  still looked wrong.
+- **A precomputed `hasAlertDisclosure` flag** decided whether the Alert editor's
+  disclosure card was drawn. It restated all three of the card's own conditions
+  in a second place, so changing one and not the other would either blank the
+  card or hide the message inside it. Reverted to the three inline conditions,
+  with a comment recording why; an empty card in the rare all-false case is the
+  cheaper failure. This was not asked for — the task said no new state and no
+  changed conditions.
+- **`AddCoinView`'s `localError` was split into two call sites**, one guarded by
+  `project == nil`. The net effect was identical, which is exactly why it should
+  not have been done: an unrequested refactor with no visible benefit is pure
+  added surface. Reverted to the single site.
+
+The delegated review also flagged a real contradiction in the task file itself:
+its constraints section exempted only Add coin from the no-wording-changes rule,
+while its concrete instructions also required renaming the Alert editor's
+`Cancel` to `Back`. The instructions were right and the constraint was
+underspecified — that error was mine, not the delegate's.
+
 ### The watch row was clipped at Small — FIXED 2026-08-16
 Reported from the desktop while verifying ui29. At Small the list's change column
 was cut off, showing `+0` and `-4` where `+0.12%` and `-4.31%` belonged. The
@@ -332,6 +364,18 @@ This was worth extracting rather than leaving to desktop checking. The defect wa
 invisible at three of the four sizes and only appears in a list long enough to
 show a scroller, so a future change to `panelWidth` could reintroduce it without
 anyone opening Small.
+
+Verified on the desktop 2026-08-16 at Small and Extra Large with a list long
+enough to scroll: the change column prints in full at both, and the price no
+longer sits far from it at Extra Large.
+
+One thing the verification screenshots raised and dismissed: the last visible row
+is cut across the middle where the list meets the detail pane. That is the list
+scrolling, not a layout defect — `detailHeight` takes a flat 40% of the available
+height, so the list's height is not a whole number of rows and cannot be without
+either tying the detail pane's height to the row count or scaling a row-height
+constant with the text size. Both are worse than a partly visible row that the
+scroller already explains.
 
 ### Charts sometimes did not draw — FIXED 2026-08-16
 Reported from the desktop after 2b-2: charts failed to appear at all three
