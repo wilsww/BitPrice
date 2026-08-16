@@ -1627,7 +1627,8 @@ private struct AddCoinView: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(candidates) { candidate in
                 candidateRow(
-                    label: "\(candidate.venue.rawValue.capitalized) · \(candidate.productID) (\(candidate.baseAsset)/\(candidate.quoteAsset))",
+                    pair: "\(candidate.baseAsset)/\(candidate.quoteAsset)",
+                    venue: candidate.venue.rawValue.capitalized,
                     value: candidate.id,
                     selection: selection
                 )
@@ -1642,7 +1643,19 @@ private struct AddCoinView: View {
         selectedCandidate != nil
     }
 
-    private func candidateRow(label: String, value: String, selection: Binding<String?>) -> some View {
+    /// The pair leads and the venue is pushed to the trailing edge.
+    ///
+    /// The product ID is deliberately absent. It is the string sent to the venue's
+    /// API, not something a user checks a choice against, and it repeated the pair
+    /// with the separator removed. `BTC/USD1` still distinguishes itself from
+    /// `BTC/USD` — more legibly than `BTCUSD1` did, since the slash marks where the
+    /// quote asset begins, which is exactly the near-miss the warning below is about.
+    private func candidateRow(
+        pair: String,
+        venue: String,
+        value: String,
+        selection: Binding<String?>
+    ) -> some View {
         Button {
             selection.wrappedValue = value
         } label: {
@@ -1650,16 +1663,21 @@ private struct AddCoinView: View {
                 Image(systemName: selection.wrappedValue == value ? "largecircle.fill.circle" : "circle")
                     .foregroundStyle(selection.wrappedValue == value ? Color.accentColor : .secondary)
                     .frame(width: 20, alignment: .center)
-                Text(label)
+                Text(pair)
                     .panelFont(.headline)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Spacer()
+                Spacer(minLength: 12)
+                Text(venue)
+                    .panelFont(.headline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             .padding(.vertical, 7)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(pair) on \(venue)")
         .overlay(alignment: .bottom) { Divider() }
     }
 
