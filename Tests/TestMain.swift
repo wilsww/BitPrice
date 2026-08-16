@@ -1209,6 +1209,57 @@ struct BitPriceTests {
                 try expect(model.charts[id] == nil, "superseded chart published after remap")
                 model.shutdown()
             },
+            AcceptanceTest(name: "17h a chart that fails its first fetch is retried, not abandoned") {
+                // The failure branch marked latestRefreshFailed on an existing
+                // series, which does nothing when there is no series yet: the row
+                // keeps saying "chart unavailable" and the only thing that would
+                // ever ask again is the 15-minute candle loop. Selecting the row,
+                // or switching ranges and back, must retry instead.
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
+                let lock = try ProcessLock(rootDirectory: root)
+                let candles = Data(#"[[100000000,"1","1","1","63000",""]]"#.utf8)
+                let transport = StubHTTPTransport([
+                    response(status: 500, body: Data()),
+                    response(body: candles)
+                ])
+                let parts = controllerParts()
+                let model = AppModel(
+                    persistenceStore: store, processLock: lock, restClients: clients(transport: transport),
+                    priceFeeds: [parts.controller], notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
+                    continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false, observeSleepWake: false
+                )
+                let id = UUID()
+                try model.addItem(WatchItem(
+                    id: id, coinGeckoID: "solana", symbol: "SOL", name: "Solana",
+                    mapping: VenueMapping(exchange: .binance, productID: "SOLUSDT", baseAsset: "SOL",
+                                          quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    alert: nil
+                ))
+                for _ in 0..<200 { await Task.yield() }
+                try expect(model.charts[id] == nil, "the failing fetch was not actually rejected")
+                try expect(
+                    model.chartFailures.contains(id),
+                    "a failed fetch looks identical to one still loading, so the row gives no sign anything went wrong"
+                )
+
+                // What the user does next: select the row.
+                model.refreshChartIfNeeded(for: id)
+                for _ in 0..<200 { await Task.yield() }
+                try expect(
+                    model.charts[id]?.points.isEmpty == false,
+                    "a row whose first chart fetch failed stays blank however often it is selected, until the 15-minute refresh happens to fix it"
+                )
+                try expect(
+                    !model.chartFailures.contains(id),
+                    "a chart that has since loaded is still described as having failed"
+                )
+                model.shutdown()
+            },
             AcceptanceTest(name: "17g a range change refreshes every chart, not only the row that changed it") {
                 // chartRange is one global setting, but charts are stored per item.
                 // setChartRange used to clear and re-request only the row whose

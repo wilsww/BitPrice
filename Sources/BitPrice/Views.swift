@@ -1121,7 +1121,14 @@ private struct SelectedCoinDetail: View {
                         .foregroundStyle(.orange)
                 }
             } else {
-                chartDisclosure("\(model.persistedState.chartRange.rawValue) chart unavailable · \(item.coinGeckoID)")
+                // "unavailable" reads as a fact about the market. A failed fetch
+                // is a fact about this attempt, and the two need different words:
+                // one is permanent, the other is worth waiting through.
+                chartDisclosure(
+                    model.chartFailures.contains(item.id)
+                        ? "\(model.persistedState.chartRange.rawValue) chart could not be loaded · \(item.coinGeckoID)"
+                        : "\(model.persistedState.chartRange.rawValue) chart unavailable · \(item.coinGeckoID)"
+                )
                     .frame(
                         maxWidth: .infinity,
                         minHeight: Self.minimumChartHeight,
@@ -1130,7 +1137,13 @@ private struct SelectedCoinDetail: View {
             }
 
         }
+        // onAppear alone is not enough. SwiftUI reuses this view when the
+        // selection moves to another row, so it does not appear again, and a row
+        // whose fetch failed would sit on "chart unavailable" until the
+        // 15-minute candle loop happened to repair it. Selecting a row is the
+        // moment a user expects its chart, so ask again then.
         .onAppear { model.refreshChartIfNeeded(for: item.id) }
+        .onChange(of: item.id) { _, newID in model.refreshChartIfNeeded(for: newID) }
     }
 
     private var chartRangeBinding: Binding<ChartRange> {

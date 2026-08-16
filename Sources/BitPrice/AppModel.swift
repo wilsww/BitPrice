@@ -55,6 +55,9 @@ final class AppModel: ObservableObject, PriceFeedSink {
     @Published private(set) var persistedState: PersistedState
     @Published private(set) var quotes: [UUID: Quote] = [:]
     @Published private(set) var charts: [UUID: ChartSeries] = [:]
+    /// Rows whose most recent chart request failed with nothing already drawn.
+    /// Kept apart from `charts` because there is no series to attach it to.
+    @Published private(set) var chartFailures: Set<UUID> = []
     @Published private(set) var connectionStates: [Venue: FeedLifecycle] = [:]
     @Published private(set) var searchResults: [SearchResult] = []
     @Published private(set) var searchActivity: RequestActivity = .idle
@@ -647,6 +650,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
             range: range, marketRevision: marketRevisions[itemID, default: 0], requestedStart: start, requestedEnd: end
         )
         chartTokens[itemID] = token
+        chartFailures.remove(itemID)
         chartTasks[itemID] = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -664,11 +668,17 @@ final class AppModel: ObservableObject, PriceFeedSink {
                 )
                 guard self.chartTokens[itemID] == token, self.chartTokenStillMatches(token) else { return }
                 self.charts[itemID] = series
+                self.chartFailures.remove(itemID)
             } catch {
                 guard !Task.isCancelled, self.chartTokens[itemID] == token, self.chartTokenStillMatches(token) else { return }
                 if var retained = self.charts[itemID] {
                     retained.latestRefreshFailed = true
                     self.charts[itemID] = retained
+                } else {
+                    // Nothing to mark as stale, because nothing was ever drawn.
+                    // Without this the row is indistinguishable from one that is
+                    // still loading, and stays that way.
+                    self.chartFailures.insert(itemID)
                 }
             }
             guard self.chartTokens[itemID] == token else { return }
