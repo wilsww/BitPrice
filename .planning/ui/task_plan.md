@@ -378,6 +378,16 @@ four candidate constructions:
 Both symbols now take a square `PanelLayout.headerIconExtent`, and `22m` checks
 both extents rather than the width alone.
 
+Verified on the desktop 2026-08-16: the two buttons render at the same size, and
+each is one shape rather than a ring inside a background.
+
+**The lesson is about the test, not the buttons.** A test that reads a constant
+and asserts something true about it can pass while the constant governs nothing.
+Mutation checking does not catch that class — it only proves the test reacts to
+the value it reads. Where a defect is defined by what gets *rendered*, measure
+the rendered thing; a throwaway `NSHostingView` that prints real frames took a
+few minutes and settled in one run what two rounds of reasoning had got wrong.
+
 ### The watch row was clipped at Small — FIXED 2026-08-16
 Reported from the desktop while verifying ui29. At Small the list's change column
 was cut off, showing `+0` and `-4` where `+0.12%` and `-4.31%` belonged. The
