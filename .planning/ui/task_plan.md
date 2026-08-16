@@ -39,12 +39,35 @@ appeared within minutes of the first real desktop launch.
   instead of throwing, and that `menuBarTitle` prints `"BitPrice"` rather than
   the price of a coin that is no longer watched — the quote itself stays in
   `quotes` after the delete, so only the item lookup keeps it off the menu bar.
-- **Corrupt-file recovery mode.** `PersistenceStore` has several paths into
+- **Corrupt-file recovery mode.** `PersistenceStore` has four paths into
   `recovery(...)`: unreadable file, unregistered schema version, a version newer
   than this app supports, and failed validation. `recoveryProtected` then blocks
-  writes until an explicit reset. Only the migration and validation paths are
-  covered by tests; the read-failure and newer-version paths are not, and the
-  read-only behaviour has never been seen on a desktop.
+  writes until an explicit reset.
+
+  All four now have tests. The read-failure and newer-version branches were
+  delegated to Codex on 2026-08-16 and landed as `20b` and `20c`, joining the
+  migration and validation coverage that already existed. Each asserts the same
+  four things, since preserving a damaged file rather than overwriting it is the
+  entire point of the mode: `load()` returns `.recovery`, an ordinary `save`
+  throws, the bytes on disk are unchanged, and only `allowRecoveryReset` gets
+  out.
+
+  Both were mutation-checked here rather than taken on the delegate's word —
+  replacing each branch's `recovery(...)` with `.firstLaunch(...)` fails that
+  branch's test and only that one.
+
+  Two decisions in `20b` worth keeping. It triggers the read failure with a real
+  file at mode `000` rather than a directory occupying the path, which keeps the
+  byte-comparison assertion meaningful; permissions are restored in a `defer` so
+  the temporary root can still be removed. The known cost is that the test
+  depends on `000` being unreadable to the running process — under root it would
+  silently assert nothing instead of failing, so a containerised CI run as root
+  would quietly lose this coverage. Verified as UID 501 on this host.
+  `20c` derives its version from `currentSchemaVersion + 1` rather than a
+  literal, so bumping the schema cannot silently retire the test.
+
+  Still unseen: the read-only UI on a desktop. What add, delete, and settings
+  edits actually look like while `isReadOnly` is true has never been observed.
 
 ### The panel background lets whatever is behind it bleed through
 Raised 2026-08-15. **Resolved in ui24.** The panel now applies `.regularMaterial`

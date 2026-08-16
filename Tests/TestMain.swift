@@ -885,6 +885,71 @@ struct BitPriceTests {
                 try store.save(.bitcoinSeed(), allowRecoveryReset: true)
                 guard case .loaded = store.load() else { throw TestFailure(description: "reset did not recover") }
             },
+            AcceptanceTest(name: "20b read failure recovery preserves the file") {
+                let root = try temporaryRoot()
+                let stateURL = root.appendingPathComponent("watchlist.json")
+                defer {
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: stateURL.path)
+                    try? FileManager.default.removeItem(at: root)
+                }
+                let store = try PersistenceStore(rootDirectory: root)
+                try store.save(.bitcoinSeed())
+                let originalBytes = try Data(contentsOf: stateURL)
+
+                // A real file with mode 000 reliably fails to read for this non-root process,
+                // so the recovery branch can be tested while comparing the original bytes.
+                try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: stateURL.path)
+                guard case .recovery(_, let reason, _) = store.load() else {
+                    throw TestFailure(description: "read failure did not enter recovery")
+                }
+                try expect(reason.contains("Could not read"), "read failure recovery reason omitted the read error")
+
+                var ordinarySaveFailed = false
+                do {
+                    try store.save(.bitcoinSeed())
+                } catch {
+                    ordinarySaveFailed = true
+                }
+                try expect(ordinarySaveFailed, "ordinary save succeeded during read recovery")
+
+                try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: stateURL.path)
+                let protectedBytes = try Data(contentsOf: stateURL)
+                try expect(protectedBytes == originalBytes, "read recovery changed the original file")
+                try store.save(.bitcoinSeed(), allowRecoveryReset: true)
+                guard case .loaded = store.load() else {
+                    throw TestFailure(description: "read recovery reset did not produce a loaded state")
+                }
+            },
+            AcceptanceTest(name: "20c newer schema recovery preserves the file") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let newerVersion = currentSchemaVersion + 1
+                let originalBytes = Data("{\"schemaVersion\":\(newerVersion)}".utf8)
+                let stateURL = root.appendingPathComponent("watchlist.json")
+                try originalBytes.write(to: stateURL)
+                let store = try PersistenceStore(rootDirectory: root)
+                guard case .recovery(_, let reason, let recoveryBytes) = store.load() else {
+                    throw TestFailure(description: "newer schema did not enter recovery")
+                }
+                let expectedReason = "Schema version \(newerVersion) is newer than this app supports"
+                try expect(reason == expectedReason, "newer schema recovery reason did not identify the unsupported version")
+                try expect(recoveryBytes == originalBytes, "newer schema recovery lost the original bytes")
+
+                var ordinarySaveFailed = false
+                do {
+                    try store.save(.bitcoinSeed())
+                } catch {
+                    ordinarySaveFailed = true
+                }
+                try expect(ordinarySaveFailed, "ordinary save succeeded during newer schema recovery")
+
+                let protectedBytes = try Data(contentsOf: stateURL)
+                try expect(protectedBytes == originalBytes, "newer schema recovery changed the original file")
+                try store.save(.bitcoinSeed(), allowRecoveryReset: true)
+                guard case .loaded = store.load() else {
+                    throw TestFailure(description: "newer schema recovery reset did not produce a loaded state")
+                }
+            },
             AcceptanceTest(name: "21 durable fire precedes injected notification submission") {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
