@@ -9,6 +9,7 @@ let maximumWebSocketMessageBytes = 1 * 1_024 * 1_024
 enum Venue: String, Codable, Sendable, CaseIterable {
     case binance
     case coinbase
+    case okx
 }
 
 enum SourceLiveness: Equatable, Sendable {
@@ -67,6 +68,14 @@ enum ChartRange: String, Codable, CaseIterable, Hashable, Sendable {
         case .hours24: 900
         case .days7: 21_600
         case .days30: 86_400
+        }
+    }
+
+    var okxBar: String {
+        switch self {
+        case .hours24: "15m"
+        case .days7: "6H"
+        case .days30: "1D"
         }
     }
 

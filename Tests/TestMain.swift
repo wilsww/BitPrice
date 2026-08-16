@@ -560,20 +560,59 @@ struct BitPriceTests {
                     VenueCandidate(venue: .binance, productID: "ETHBTC", baseAsset: "ETH", quoteAsset: "BTC"),
                     VenueCandidate(venue: .binance, productID: "ETHUSDC", baseAsset: "ETH", quoteAsset: "USDC"),
                     VenueCandidate(venue: .coinbase, productID: "ETH-USD", baseAsset: "ETH", quoteAsset: "USD"),
-                    VenueCandidate(venue: .binance, productID: "ETHUSDT", baseAsset: "ETH", quoteAsset: "USDT")
+                    VenueCandidate(venue: .binance, productID: "ETHUSDT", baseAsset: "ETH", quoteAsset: "USDT"),
+                    VenueCandidate(venue: .okx, productID: "ETH-USDT", baseAsset: "ETH", quoteAsset: "USDT")
                 ]
                 let ordered = VenueCandidateOrdering.sorted(candidates)
                 try expect(
-                    ordered.map(\.productID) == ["ETH-USD", "ETHUSDT", "ETHUSDC", "ETHBTC"],
+                    ordered.map(\.productID) == ["ETH-USD", "ETHUSDT", "ETH-USDT", "ETHUSDC", "ETHBTC"],
                     "venue candidates were not ordered by preferred quote asset"
                 )
                 let sources = configuredPriceSources(clients: clients)
-                try expect(sources.map(\.venue) == [.binance, .coinbase], "configured source order changed")
-                try expect(sources[0].liveness == .push && sources[1].liveness == .polled(seconds: 60),
-                           "configured source liveness changed")
+                try expect(
+                    sources.map(\.venue) == [.binance, .coinbase, .okx],
+                    "the add flow would omit a configured venue or present its markets in an unstable order"
+                )
+                try expect(sources[0].liveness == .push &&
+                               sources[1].liveness == .polled(seconds: 60) &&
+                               sources[2].liveness == .polled(seconds: 30),
+                           "quote scheduling and polling disclosures would use the wrong venue cadence")
                 try expect(sources.allSatisfy { source in
                     ChartRange.allCases.allSatisfy(source.supports)
-                }, "a configured source stopped supporting a current chart range")
+                }, "a current chart range would disappear for one of the configured venues")
+            },
+            AcceptanceTest(name: "08d OKX catalogue decoding and API errors") {
+                let catalogue = Data(#"{"code":"0","msg":"","data":[{"instId":"BTC-USDT","baseCcy":"BTC","quoteCcy":"USDT","state":"live"},{"instId":"BTC-USDC","baseCcy":"BTC","quoteCcy":"USDC","state":"rebase"},{"instId":"ETH-USDT","baseCcy":"ETH","quoteCcy":"USDT","state":"live"}]}"#.utf8)
+                let apiError = Data(#"{"code":"50001","msg":"service unavailable","data":[]}"#.utf8)
+                let transport = StubHTTPTransport([
+                    response(body: catalogue),
+                    response(body: apiError)
+                ])
+                let client = clients(transport: transport)
+                let candidates = try await client.okxCandidates(symbol: "BTC")
+                try expect(
+                    candidates == [VenueCandidate(
+                        venue: .okx,
+                        productID: "BTC-USDT",
+                        baseAsset: "BTC",
+                        quoteAsset: "USDT"
+                    )],
+                    "OKX search would hide the live BTC market or offer a rebase market that cannot trade"
+                )
+                do {
+                    _ = try await client.okxCandidates(symbol: "BTC")
+                    throw TestFailure(description: "OKX API failure was presented as usable market data")
+                } catch is NetworkFailure {}
+
+                let requests = await transport.capturedRequests()
+                let firstQuery = requests.first?.url.flatMap {
+                    URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems
+                }
+                try expect(
+                    requests.first?.url?.path == "/api/v5/public/instruments" &&
+                        firstQuery?.contains(URLQueryItem(name: "instType", value: "SPOT")) == true,
+                    "OKX market search would query the wrong instrument catalogue"
+                )
             },
             AcceptanceTest(name: "08c CoinGecko HTML entity decoding") {
                 let searchBody = Data(#"{"coins":[{"id":"sand","name":"S&amp;L &lt;token&gt; &quot;quoted&quot; &#39;single&#39; &apos;apostrophe&apos; &#38; &#x26; & bare","symbol":"s&AMP;l","market_cap_rank":null,"thumb":null}]}"#.utf8)
@@ -699,6 +738,37 @@ struct BitPriceTests {
                     throw TestFailure(description: "nonpositive Coinbase last price was accepted")
                 } catch is NetworkFailure {}
             },
+            AcceptanceTest(name: "15b OKX ticker becomes a source quote") {
+                let validBody = Data(#"{"code":"0","msg":"","data":[{"last":"63003.3","open24h":"63031.4"}]}"#.utf8)
+                let unavailableBody = Data(#"{"code":"0","msg":"","data":[{"last":"100","open24h":"0"}]}"#.utf8)
+                let transport = StubHTTPTransport([
+                    response(body: validBody),
+                    response(body: unavailableBody)
+                ])
+                let client = clients(transport: transport)
+                let quote = try await client.okxTicker(productID: "BTC-USDT")
+                let last = Decimal(string: "63003.3")!
+                let open = Decimal(string: "63031.4")!
+                try expect(
+                    quote == SourceQuote(price: last, change: .percent((last - open) / open * 100)),
+                    "OKX rows would show the wrong price or 24-hour percentage"
+                )
+                let unavailable = try await client.okxTicker(productID: "BTC-USDT")
+                try expect(
+                    unavailable == SourceQuote(price: 100, change: .unavailable),
+                    "OKX could fabricate a percentage when its 24-hour open is not a usable price"
+                )
+
+                let request = try expectOne(Array((await transport.capturedRequests()).prefix(1)))
+                let query = request.url.flatMap {
+                    URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems
+                }
+                try expect(
+                    request.url?.path == "/api/v5/market/ticker" &&
+                        query?.contains(URLQueryItem(name: "instId", value: "BTC-USDT")) == true,
+                    "OKX quote polling would request a different market than the one the user selected"
+                )
+            },
             AcceptanceTest(name: "16 Coinbase primary quote makes a row live") {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
@@ -792,19 +862,53 @@ struct BitPriceTests {
                 }
                 catch let failure as NetworkFailure { try expect(failure.code == 500, "wrong status") }
             },
+            AcceptanceTest(name: "17f OKX newest-first millisecond candles") {
+                let olderMillis: Int64 = 1_786_873_500_000
+                let newerMillis: Int64 = 1_786_874_400_000
+                let body = Data(#"{"code":"0","msg":"","data":[["1786874400000","62986.2","63012.5","62965","63003.3","18.76513281"],["1786873500000","62970","63000","62950","62986.2","12.5"]]}"#.utf8)
+                let transport = StubHTTPTransport([response(body: body)])
+                let client = clients(transport: transport)
+                let olderDate = Date(timeIntervalSince1970: TimeInterval(olderMillis) / 1_000)
+                let newerDate = Date(timeIntervalSince1970: TimeInterval(newerMillis) / 1_000)
+                let points = try await client.okxCandles(
+                    productID: "BTC-USDT",
+                    range: .hours24,
+                    start: olderDate.addingTimeInterval(-1),
+                    end: newerDate.addingTimeInterval(1)
+                )
+                try expect(
+                    points == [
+                        CandlePoint(bucketStart: olderDate, close: Decimal(string: "62986.2")!),
+                        CandlePoint(bucketStart: newerDate, close: Decimal(string: "63003.3")!)
+                    ],
+                    "OKX chart would be empty or run backwards because candle timestamps or ordering were decoded incorrectly"
+                )
+
+                let request = try expectOne(await transport.capturedRequests())
+                let queryItems = request.url.flatMap {
+                    URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems
+                } ?? []
+                let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+                try expect(
+                    request.url?.path == "/api/v5/market/history-candles" &&
+                        query == ["instId": "BTC-USDT", "bar": "15m", "limit": "96"],
+                    "OKX chart refresh would request the wrong market, density, or pagination mode"
+                )
+            },
             AcceptanceTest(name: "17c chart range table and Coinbase limits") {
-                let expected: [(ChartRange, TimeInterval, String, Int, Int)] = [
-                    (.hours24, 86_400, "15m", 900, 96),
-                    (.days7, 604_800, "6h", 21_600, 29),
-                    (.days30, 2_592_000, "1d", 86_400, 31)
+                let expected: [(ChartRange, TimeInterval, String, Int, String, Int)] = [
+                    (.hours24, 86_400, "15m", 900, "15m", 96),
+                    (.days7, 604_800, "6h", 21_600, "6H", 29),
+                    (.days30, 2_592_000, "1d", 86_400, "1D", 31)
                 ]
-                for (range, lookback, interval, granularity, candles) in expected {
+                for (range, lookback, interval, granularity, okxBar, candles) in expected {
                     try expect(
                         range.lookbackSeconds == lookback &&
                             range.binanceInterval == interval &&
                             range.coinbaseGranularity == granularity &&
+                            range.okxBar == okxBar &&
                             range.candleCount == candles,
-                        "chart range table changed for \(range.rawValue)"
+                        "the \(range.rawValue) chart would request the wrong window, bar, or candle count"
                     )
                 }
                 let legalCoinbaseGranularities: Set<Int> = [60, 300, 900, 3_600, 21_600, 86_400]
@@ -1360,7 +1464,9 @@ struct BitPriceTests {
                            "Binance stopped reporting a push feed, so the alert editor would claim it polls")
                 try expect(model.sourceLiveness(for: .coinbase) == .polled(seconds: 60),
                            "Coinbase stopped reporting a 60-second poll, so its missed-breach caveat would vanish")
-                try expect(model.configuredSourceNames == "Binance or Coinbase",
+                try expect(model.sourceLiveness(for: .okx) == .polled(seconds: 30),
+                           "OKX stopped reporting a 30-second poll, so users would get the wrong alert timing warning")
+                try expect(model.configuredSourceNames == "Binance, Coinbase or Okx",
                            "the no-market message no longer names the configured sources")
                 model.shutdown()
             },
@@ -1661,7 +1767,8 @@ struct BitPriceTests {
         RESTClients(
             transport: transport, continuousClock: FixedContinuousClock(),
             wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 1_700_000_000)),
-            coinbasePacer: NoopPacer(), binancePacer: NoopPacer(), coinGeckoPacer: NoopPacer()
+            coinbasePacer: NoopPacer(), binancePacer: NoopPacer(), okxPacer: NoopPacer(),
+            coinGeckoPacer: NoopPacer()
         )
     }
 

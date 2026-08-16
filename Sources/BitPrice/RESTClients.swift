@@ -227,6 +227,32 @@ private struct CoinbaseStats: Decodable {
     }
 }
 
+private struct OKXEnvelope<Element: Decodable>: Decodable {
+    let code: String
+    let msg: String
+    let data: [Element]
+}
+
+private struct OKXInstrument: Decodable {
+    let instId: String
+    let baseCcy: String
+    let quoteCcy: String
+    let state: String
+}
+
+private struct OKXTicker: Decodable {
+    let last: String
+    let open24h: String?
+
+    enum CodingKeys: String, CodingKey { case last, open24h }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        last = try container.decode(String.self, forKey: .last)
+        open24h = try? container.decode(String.self, forKey: .open24h)
+    }
+}
+
 private enum JSONScalar: Decodable {
     case number(Double)
     case string(String)
@@ -270,6 +296,7 @@ actor RESTClients {
     private let wallClock: any WallClock
     private let coinbasePacer: any RequestPacer
     private let binancePacer: any RequestPacer
+    private let okxPacer: any RequestPacer
     private let coinGeckoPacer: any RequestPacer
     private var coinGeckoBlockedUntil: MonotonicInstant?
 
@@ -279,6 +306,7 @@ actor RESTClients {
         wallClock: any WallClock,
         coinbasePacer: any RequestPacer,
         binancePacer: any RequestPacer,
+        okxPacer: any RequestPacer,
         coinGeckoPacer: any RequestPacer
     ) {
         self.transport = transport
@@ -286,6 +314,7 @@ actor RESTClients {
         self.wallClock = wallClock
         self.coinbasePacer = coinbasePacer
         self.binancePacer = binancePacer
+        self.okxPacer = okxPacer
         self.coinGeckoPacer = coinGeckoPacer
     }
 
@@ -300,6 +329,7 @@ actor RESTClients {
             wallClock: wallClock,
             coinbasePacer: TokenBucketPacer(clock: continuousClock, ratePerSecond: 10, burst: 15),
             binancePacer: TokenBucketPacer(clock: continuousClock, ratePerSecond: 20, burst: 100),
+            okxPacer: TokenBucketPacer(clock: continuousClock, ratePerSecond: 10, burst: 20),
             coinGeckoPacer: TokenBucketPacer(clock: continuousClock, ratePerSecond: 5, burst: 5)
         )
     }
@@ -364,6 +394,28 @@ actor RESTClients {
         })
     }
 
+    func okxCandidates(symbol: String) async throws -> [VenueCandidate] {
+        try await okxPacer.acquire(priority: .productCatalog, cost: 1)
+        var components = URLComponents(string: "https://www.okx.com/api/v5/public/instruments")!
+        components.queryItems = [URLQueryItem(name: "instType", value: "SPOT")]
+        let response = try await load(url: try requireURL(components), priority: .productCatalog)
+        if response.statusCode == 429 {
+            await okxPacer.applyRateLimitBackoff(seconds: retryAfterSeconds(headers: response.headers))
+        }
+        try requireSuccess(response, domain: "okx")
+        let instruments: [OKXInstrument] = try decodeOKX(response.body)
+        return VenueCandidateOrdering.sorted(instruments.compactMap { instrument in
+            guard instrument.baseCcy.caseInsensitiveCompare(symbol) == .orderedSame,
+                  instrument.state == "live" else { return nil }
+            return VenueCandidate(
+                venue: .okx,
+                productID: instrument.instId,
+                baseAsset: instrument.baseCcy,
+                quoteAsset: instrument.quoteCcy
+            )
+        })
+    }
+
     func coinbaseStats(productID: String) async throws -> SourceQuote {
         try await coinbasePacer.acquire(priority: .quote, cost: 1)
         let response = try await load(url: try coinbaseURL(productID: productID, suffix: "stats"), priority: .quote)
@@ -376,6 +428,27 @@ actor RESTClients {
             throw NetworkFailure(domain: "coinbase", code: -2, message: "Coinbase last price is missing, malformed, or nonpositive")
         }
         guard let rawOpen = stats.open,
+              let open = finiteDecimal(from: rawOpen), open > 0 else {
+            return SourceQuote(price: last, change: .unavailable)
+        }
+        return SourceQuote(price: last, change: .percent((last - open) / open * 100))
+    }
+
+    func okxTicker(productID: String) async throws -> SourceQuote {
+        try await okxPacer.acquire(priority: .quote, cost: 1)
+        var components = URLComponents(string: "https://www.okx.com/api/v5/market/ticker")!
+        components.queryItems = [URLQueryItem(name: "instId", value: productID)]
+        let response = try await load(url: try requireURL(components), priority: .quote)
+        if response.statusCode == 429 {
+            await okxPacer.applyRateLimitBackoff(seconds: retryAfterSeconds(headers: response.headers))
+        }
+        try requireSuccess(response, domain: "okx")
+        let tickers: [OKXTicker] = try decodeOKX(response.body)
+        guard tickers.count == 1, let ticker = tickers.first,
+              let last = positiveDecimal(from: ticker.last) else {
+            throw NetworkFailure(domain: "okx", code: -2, message: "OKX ticker price is missing, malformed, or nonpositive")
+        }
+        guard let rawOpen = ticker.open24h,
               let open = finiteDecimal(from: rawOpen), open > 0 else {
             return SourceQuote(price: last, change: .unavailable)
         }
@@ -428,6 +501,28 @@ actor RESTClients {
         return normalizedCandles(candidates, start: start, end: end)
     }
 
+    func okxCandles(productID: String, range: ChartRange, start: Date, end: Date) async throws -> [CandlePoint] {
+        try await okxPacer.acquire(priority: .candle, cost: 1)
+        var components = URLComponents(string: "https://www.okx.com/api/v5/market/history-candles")!
+        components.queryItems = [
+            URLQueryItem(name: "instId", value: productID),
+            URLQueryItem(name: "bar", value: range.okxBar),
+            URLQueryItem(name: "limit", value: String(range.candleCount))
+        ]
+        let response = try await load(url: try requireURL(components), priority: .candle)
+        if response.statusCode == 429 {
+            await okxPacer.applyRateLimitBackoff(seconds: retryAfterSeconds(headers: response.headers))
+        }
+        try requireSuccess(response, domain: "okx")
+        let rows: [[String]] = try decodeOKX(response.body)
+        let candidates = rows.compactMap { row -> CandlePoint? in
+            guard row.count > 4, let millis = Int64(row[0]), millis >= 0,
+                  let close = finiteDecimal(from: row[4]), close > 0 else { return nil }
+            return CandlePoint(bucketStart: Date(timeIntervalSince1970: TimeInterval(millis) / 1_000), close: close)
+        }
+        return normalizedCandles(candidates, start: start, end: end)
+    }
+
     private func load(url: URL, priority: RESTRequestPriority) async throws -> HTTPResponseData {
         var request = URLRequest(url: url, timeoutInterval: 15)
         request.httpMethod = "GET"
@@ -465,6 +560,17 @@ actor RESTClients {
     private func decode<T: Decodable>(_ data: Data, domain: String) throws -> T {
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw NetworkFailure(domain: domain, code: -4, message: "Invalid JSON: \(error.localizedDescription)") }
+    }
+
+    private func decodeOKX<Element: Decodable>(_ data: Data) throws -> [Element] {
+        let envelope: OKXEnvelope<Element> = try decode(data, domain: "okx")
+        guard envelope.code == "0" else {
+            let message = envelope.msg.isEmpty
+                ? "OKX API error \(envelope.code)"
+                : "OKX API error \(envelope.code): \(envelope.msg)"
+            throw NetworkFailure(domain: "okx", code: Int(envelope.code) ?? -5, message: message)
+        }
+        return envelope.data
     }
 
     private func requireURL(_ components: URLComponents) throws -> URL {
@@ -573,9 +679,41 @@ struct CoinbasePriceSource: PriceSource {
     }
 }
 
+struct OKXPriceSource: PriceSource {
+    let venue = Venue.okx
+    let liveness = SourceLiveness.polled(seconds: 30)
+    private let clients: RESTClients
+
+    init(clients: RESTClients) {
+        self.clients = clients
+    }
+
+    func candidates(symbol: String) async throws -> [VenueCandidate] {
+        try await clients.okxCandidates(symbol: symbol)
+    }
+
+    func quote(productID: String) async throws -> SourceQuote {
+        try await clients.okxTicker(productID: productID)
+    }
+
+    func candles(
+        productID: String,
+        range: ChartRange,
+        start: Date,
+        end: Date
+    ) async throws -> [CandlePoint] {
+        try await clients.okxCandles(productID: productID, range: range, start: start, end: end)
+    }
+
+    func supports(_ range: ChartRange) -> Bool {
+        true
+    }
+}
+
 func configuredPriceSources(clients: RESTClients) -> [any PriceSource] {
     [
         BinancePriceSource(clients: clients),
-        CoinbasePriceSource(clients: clients)
+        CoinbasePriceSource(clients: clients),
+        OKXPriceSource(clients: clients)
     ]
 }
