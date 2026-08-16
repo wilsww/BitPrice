@@ -319,6 +319,43 @@ while its concrete instructions also required renaming the Alert editor's
 `Cancel` to `Back`. The instructions were right and the constraint was
 underspecified — that error was mine, not the delegate's.
 
+### The header's two icon buttons drew two nested shapes — FIXED 2026-08-16
+Raised from the desktop 2026-08-16. The add and settings buttons used the
+`plus.circle` and `gearshape.circle` symbols inside ordinary bordered buttons, so
+each control showed the symbol's own drawn ring inside the button's rounded
+background — two concentric shapes where macOS draws one.
+
+Fixed by using the bare `plus` and `gearshape` symbols and raising them from
+`.title2` to `.title`. The button background is kept: it is the standard bordered
+style, it is what carries the disabled state for the add button, and removing it
+would have shrunk the click target to the glyph itself — about 14 points at
+Small, a usability regression rather than a style change.
+
+Measured before choosing the size. Dropping `.circle` costs less than assumed —
+2 to 5 points at the same point size, not the large shrink expected from removing
+a ring. The four candidates at Small and Extra Large:
+
+| style | Small | Extra Large | vs before |
+|---|---|---|---|
+| `.title3` | 14×13 | 23×21 | 4–7 smaller |
+| `.title2` (before) | 16×14 | 26×23 | 2–5 smaller |
+| **`.title`** | 21×19 | 34×30 | **2–5 larger** |
+| `.largeTitle` | 24×21 | 40×36 | 4–11 larger |
+
+`.title` was chosen because the glyph is visibly bigger while the button grows by
+only 2–5 points. `.largeTitle` adds 11 points at Extra Large, which makes the
+button noticeably fatter rather than the icon noticeably clearer.
+
+**What the measurement caught that the eye would not have.** `gearshape` draws
+wider than `plus` — 27 points against 23 at Medium — so the two buttons would
+have ended up different widths sitting directly next to each other. The `.circle`
+variants had hidden this: the enclosing ring set the size for both, so they were
+identical at 20×19 despite the glyphs inside differing. Both now reserve
+`PanelLayout.headerIconWidth`, the wider of the two, scaled by the same factor as
+the rest of the panel. Test `22m` measures both symbols at the point size
+`.title` actually resolves to and fails if either exceeds the reserved width;
+verified by mutation, setting the shared width to `plus`'s 23 fails it.
+
 ### The watch row was clipped at Small — FIXED 2026-08-16
 Reported from the desktop while verifying ui29. At Small the list's change column
 was cut off, showing `+0` and `-4` where `+0.12%` and `-4.31%` belonged. The

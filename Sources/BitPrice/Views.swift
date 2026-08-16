@@ -112,6 +112,22 @@ enum PanelLayout {
     static func layoutFits(_ preference: TextSizePreference) -> Bool {
         requiredRowWidth(for: preference) <= availableRowWidth(for: preference)
     }
+
+    /// Width reserved for each of the header's two icon buttons, at Medium.
+    ///
+    /// The two symbols do not draw at the same width. `gearshape` is 27 points
+    /// wide at Medium against `plus`'s 23, so without a shared width their two
+    /// button backgrounds would differ visibly — they sit next to each other, so
+    /// a 4-point difference reads as a mistake. The bordered `.circle` variants
+    /// these replaced happened to be identical because the enclosing circle set
+    /// the size for both, which is why the difference only appears now.
+    ///
+    /// Set to the wider of the two, measured rather than guessed.
+    static let headerIconWidth: CGFloat = 27
+
+    static func headerIconWidth(for preference: TextSizePreference) -> CGFloat {
+        headerIconWidth * columnScale(for: preference)
+    }
 }
 
 private extension TextSizePreference {
@@ -591,12 +607,23 @@ struct ContentView: View {
                         .foregroundStyle(color(for: presentation))
                 }
                 Spacer()
-                Button { route = .add } label: { Image(systemName: "plus.circle") }
-                    .panelFont(.title2)
-                    .disabled(model.isReadOnly || model.items.count >= maximumWatchlistCount)
-                Button { route = .settings } label: { Image(systemName: "gearshape.circle") }
-                    .panelFont(.title2)
-                    .help("Settings")
+                // Bare symbols rather than their `.circle` variants: the drawn
+                // ring duplicated the button's own background, so each control
+                // read as two nested shapes. The shared width keeps the two
+                // backgrounds identical — see `PanelLayout.headerIconWidth`.
+                Button { route = .add } label: {
+                    Image(systemName: "plus")
+                        .frame(width: PanelLayout.headerIconWidth(for: model.persistedState.textSize))
+                }
+                .panelFont(.title)
+                .disabled(model.isReadOnly || model.items.count >= maximumWatchlistCount)
+                .help("Add a coin")
+                Button { route = .settings } label: {
+                    Image(systemName: "gearshape")
+                        .frame(width: PanelLayout.headerIconWidth(for: model.persistedState.textSize))
+                }
+                .panelFont(.title)
+                .help("Settings")
             }
             if let recovery = model.recoveryMessage {
                 BannerView(text: recovery, color: .orange)
