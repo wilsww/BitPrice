@@ -610,6 +610,23 @@ mutation. The general point: a test that a second push feed cannot stale the
 first venue's rows does not also prove ticks reach the right row, and those two
 had to be pinned separately.
 
+*Verified on the desktop 2026-08-16, and it needed to be despite the change
+being structural.* The one thing no unit test covers is a real connection
+filling `connectionStates` — every test writes that dictionary directly. If
+`BinanceFeedController` failed to report its venue, the entry would stay absent,
+`rowPresentation` would read `?? .stopped`, and every row would show offline
+while prices carried on updating. That contradiction is invisible to the suite
+and obvious on screen. The header read **live** with prices moving, so the real
+feed does populate the venue-keyed state.
+
+The screenshot proved more than was asked. Four Binance push rows and one OKX
+polled row (BTC/USD, the primary) aggregated to `live`, which exercises both
+arms of `rowPresentation` at once: `.push` reading `connectionStates` and
+`.polled` reading `sourceActivity` and freshness. Both have to be right for the
+aggregate to be live, so mixed-liveness aggregation is confirmed rather than
+assumed. No backup was needed for this step — unlike 2a, it changes no
+persisted data.
+
 **2b-2 — extract the protocol and add the OKX feed. One day.** A `PriceFeed`
 protocol and a coordinator owning several feeds, plus an `OKXFeed` that connects
 first and then sends `{"op":"subscribe",…}`. By then the multi-feed state model
