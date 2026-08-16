@@ -27,9 +27,17 @@ struct ChartAxisTick: Equatable {
     let isBaseline: Bool
 }
 
-private extension TextSizePreference {
-    var panelWidth: CGFloat {
-        switch self {
+/// The panel's fixed dimensions, and the watch row's column widths.
+///
+/// These are gathered here rather than written inline in the view bodies because
+/// they are not independent: the row's three columns have to fit inside the
+/// panel's width, and both sides of that comparison change with the text-size
+/// preference. Kept as plain values so `layoutFits` can be checked without a
+/// running UI — the one size where the columns did not fit was also the one size
+/// nobody had opened.
+enum PanelLayout {
+    static func panelWidth(for preference: TextSizePreference) -> CGFloat {
+        switch preference {
         case .small: 560
         case .medium: 660
         case .large: 760
@@ -44,14 +52,72 @@ private extension TextSizePreference {
     /// and Settings overflowed there — clipping its own header and the Quit row
     /// once the scroll view was removed. Raising this one step is what makes
     /// "the settings always fit" true rather than assumed.
-    var panelHeight: CGFloat {
-        switch self {
+    static func panelHeight(for preference: TextSizePreference) -> CGFloat {
+        switch preference {
         case .small: 750
         case .medium: 780
         case .large: 880
         case .extraLarge: 980
         }
     }
+
+    /// `ContentView` pads its content by this on every edge.
+    static let contentPadding: CGFloat = 16
+
+    /// The watchlist's scroller overlaps the row's trailing edge.
+    ///
+    /// An estimate, and deliberately generous: being wrong high costs unused
+    /// width, being wrong low clips the change column, which is the defect this
+    /// whole type exists to prevent.
+    static let scrollerWidth: CGFloat = 15
+
+    /// Gap between the watch row's three columns.
+    static let rowColumnSpacing: CGFloat = 12
+
+    /// Unscaled column widths for the watch row, at Medium.
+    ///
+    /// The leading column is a minimum — it holds the star, symbol and quote
+    /// asset and absorbs whatever width the other two do not use. The other two
+    /// are exact.
+    static let rowLeadingMinimum: CGFloat = 240
+    static let rowPriceWidth: CGFloat = 170
+    static let rowChangeWidth: CGFloat = 105
+
+    /// Column widths scale with the type inside them.
+    ///
+    /// They were point constants while both `panelWidth` and the font sizes grew
+    /// with the preference, and the panel does not grow as fast as the type:
+    /// Small is 65% of Extra Large's width but 59% of its type scale. The three
+    /// columns summed to 539 points against 513 available at Small, so the change
+    /// column was clipped there and only there; at the other three sizes the same
+    /// constants left between 74 and 274 points unused, which is why the price sat
+    /// far from the change at Extra Large.
+    static func columnScale(for preference: TextSizePreference) -> CGFloat {
+        PanelFont.multiplier(for: preference)
+    }
+
+    /// Width a watch row can actually draw into.
+    static func availableRowWidth(for preference: TextSizePreference) -> CGFloat {
+        panelWidth(for: preference) - contentPadding * 2 - scrollerWidth
+    }
+
+    /// Width the row's columns demand, including the gaps between them.
+    static func requiredRowWidth(for preference: TextSizePreference) -> CGFloat {
+        let scale = columnScale(for: preference)
+        return (rowLeadingMinimum + rowPriceWidth + rowChangeWidth) * scale
+            + rowColumnSpacing * 2
+    }
+
+    /// Whether a watch row fits without clipping its trailing column.
+    static func layoutFits(_ preference: TextSizePreference) -> Bool {
+        requiredRowWidth(for: preference) <= availableRowWidth(for: preference)
+    }
+}
+
+private extension TextSizePreference {
+    var panelWidth: CGFloat { PanelLayout.panelWidth(for: self) }
+
+    var panelHeight: CGFloat { PanelLayout.panelHeight(for: self) }
 
     var displayName: String {
         switch self {
@@ -992,13 +1058,14 @@ private struct WatchRow: View {
     @ObservedObject var model: AppModel
     let item: WatchItem
     let editAlert: () -> Void
+    @Environment(\.panelTextSize) private var panelTextSize
 
     var body: some View {
         let presentation = model.rowPresentation(for: item)
         let isPrimary = model.primaryItemID == item.id
         let isOffline = presentation == .offline
         let alertsUnavailable = !model.alertsEnabled || presentation != .live
-        HStack(spacing: 12) {
+        HStack(spacing: PanelLayout.rowColumnSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Button {
                     do { try model.setPrimary(item.id) } catch {}
@@ -1022,7 +1089,11 @@ private struct WatchRow: View {
                         .foregroundStyle(presentation == .stale ? .orange : .red)
                 }
             }
-            .frame(minWidth: 240, maxWidth: .infinity, alignment: .leading)
+            .frame(
+                minWidth: PanelLayout.rowLeadingMinimum * columnScale,
+                maxWidth: .infinity,
+                alignment: .leading
+            )
 
             if let quote = model.quotes[item.id] {
                 Text(AppModel.formatPrice(quote.price))
@@ -1031,12 +1102,12 @@ private struct WatchRow: View {
                     .foregroundStyle(isOffline ? Color.secondary : Color.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                    .frame(width: 170, alignment: .trailing)
+                    .frame(width: PanelLayout.rowPriceWidth * columnScale, alignment: .trailing)
             } else {
                 Text("—")
                     .panelFont(.title2)
                     .foregroundStyle(.secondary)
-                    .frame(width: 170, alignment: .trailing)
+                    .frame(width: PanelLayout.rowPriceWidth * columnScale, alignment: .trailing)
             }
 
             VStack(alignment: .trailing, spacing: 3) {
@@ -1058,10 +1129,14 @@ private struct WatchRow: View {
                 }
                 .buttonStyle(.borderless)
             }
-            .frame(width: 105, alignment: .trailing)
+            .frame(width: PanelLayout.rowChangeWidth * columnScale, alignment: .trailing)
         }
         .padding(.vertical, 5)
         .opacity(presentation == .stale || isOffline ? 0.62 : 1)
+    }
+
+    private var columnScale: CGFloat {
+        PanelLayout.columnScale(for: panelTextSize)
     }
 
     private func changeColor(_ change: QuoteChange) -> Color {

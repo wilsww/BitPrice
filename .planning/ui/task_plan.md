@@ -287,6 +287,52 @@ sizes while the type does not. Extracting a card container must not change the
 height of that content. Settings needs re-checking on the desktop at **Small and
 Extra Large** specifically, not at whatever size happens to be set.
 
+### The watch row was clipped at Small — FIXED 2026-08-16
+Reported from the desktop while verifying ui29. At Small the list's change column
+was cut off, showing `+0` and `-4` where `+0.12%` and `-4.31%` belonged. The
+other three text sizes were fine.
+
+**The row's column widths were point constants** — leading `minWidth: 240`, price
+`width: 170`, change `width: 105`, plus two 12-point gaps — while both the panel
+width and the font sizes grew with the text-size preference. The panel does not
+grow as fast as the type: Small is 65% of Extra Large's width but 59% of its type
+scale, so the smallest size is where fixed constants break first. This is the
+same shape as the Settings height finding above, arrived at independently.
+
+Measured rather than estimated, using real `NSFont` metrics for the widest
+strings the row actually renders:
+
+| size | available | required | result |
+|---|---|---|---|
+| Small | 513 | 539 | **clipped by 26** |
+| Medium | 613 | 539 | 74 unused |
+| Large | 713 | 539 | 174 unused |
+| Extra Large | 813 | 539 | 274 unused |
+
+"Available" is the panel width less 32 points of `ContentView` padding and about
+15 for the scroller. So Small was the only size that clipped, but the same
+constants wasted up to 274 points elsewhere — which is why the price sat so far
+from the change at Extra Large.
+
+Fixed by scaling all three columns by `PanelFont.multiplier`, the same factor the
+type uses. At Small that gives the leading column 204 points against the 173 the
+widest symbol, quote asset and STALE badge actually need; the price 145 against
+85; the change 89 against 58.
+
+**The constants moved into a new `PanelLayout` type.** They were spread across a
+private extension and three `frame` calls, so nothing could state the rule that
+connects them — the columns must fit inside the panel, and both sides of that
+comparison move with the preference. `PanelLayout.layoutFits(_:)` states it as a
+plain value, and tests `22k` and `22l` check it at all four sizes. Both were
+verified by mutation: pinning `columnScale` back to 1.0 fails `22k` at Small with
+the real numbers in its message (`needs 539 points but the panel leaves 513`) and
+fails `22l` as well.
+
+This was worth extracting rather than leaving to desktop checking. The defect was
+invisible at three of the four sizes and only appears in a list long enough to
+show a scroller, so a future change to `panelWidth` could reintroduce it without
+anyone opening Small.
+
 ### Charts sometimes did not draw — FIXED 2026-08-16
 Reported from the desktop after 2b-2: charts failed to appear at all three
 ranges, intermittently, and worse right after a relaunch. **Three separate

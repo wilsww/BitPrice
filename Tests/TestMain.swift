@@ -2227,6 +2227,32 @@ struct BitPriceTests {
                     "medium derived font size does not equal its base size"
                 )
             },
+            AcceptanceTest(name: "22k watch row columns fit the panel at every text size") {
+                for preference in TextSizePreference.allCases {
+                    try expect(
+                        PanelLayout.layoutFits(preference),
+                        "the watch row's change column is clipped at \(preference.rawValue): it needs "
+                            + "\(Int(PanelLayout.requiredRowWidth(for: preference).rounded())) points but the panel "
+                            + "leaves \(Int(PanelLayout.availableRowWidth(for: preference).rounded()))"
+                    )
+                }
+            },
+            AcceptanceTest(name: "22l watch row columns scale with the type inside them") {
+                // The clipping this guards against came from the columns being
+                // point constants while the panel and the type both grew. Equal
+                // widths across two text sizes means that has been reintroduced.
+                let small = PanelLayout.requiredRowWidth(for: .small)
+                let extraLarge = PanelLayout.requiredRowWidth(for: .extraLarge)
+                try expect(
+                    small < extraLarge,
+                    "the watch row reserves the same column width at Small as at Extra Large, so one of them "
+                        + "is either clipped or padded with unusable space"
+                )
+                try expect(
+                    PanelLayout.columnScale(for: .medium) == 1.0,
+                    "the watch row's column widths no longer read as their written point values at Medium"
+                )
+            },
             AcceptanceTest(name: "22d alert default picker options") {
                 let retainedCooldown = AlertDefaultPickerOption(label: "45s", value: 45)
                 let currentCooldown = 60
