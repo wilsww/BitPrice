@@ -590,13 +590,25 @@ is not a distinction worth resting price routing on.
 
 **So 2b splits, for the third time and for the same reason.**
 
-**2b-1 — make feed state per-venue. Half a day, no behaviour change.** Add
+**2b-1 — make feed state per-venue. Done 2026-08-16, no behaviour change.** Add
 `venue` to `PriceTick`, add it to both `PriceFeedSink` methods, and turn
 `connectionState` into `[Venue: FeedLifecycle]` with `rowPresentation` looking
 up the venue that row actually uses. With one push feed configured, a dictionary
 holding a single `.binance` key produces exactly the results the scalar produces
 today — which is what makes the existing tests a usable regression net, the same
-position step one was in.
+position step one was in. Landed in "refactor: give feed state and ticks a
+venue"; 12 lines of production change across three files, and no connection,
+identity, lease, retry or backoff logic touched. Test count 55 to 57.
+
+*A mutation check found a gap the delegated work left, and it was worth the
+time.* Deleting the venue comparison from `feedDidAccept` entirely — routing
+ticks on product ID alone — left all 56 tests green. Two venues **can** carry
+the same product ID, because `validatePersistedState` only rejects a duplicate
+market on the same venue; Binance writing `BTCUSDT` where OKX writes `BTC-USDT`
+is what hides it today. Test 22j now pins it, and fails on exactly that
+mutation. The general point: a test that a second push feed cannot stale the
+first venue's rows does not also prove ticks reach the right row, and those two
+had to be pinned separately.
 
 **2b-2 — extract the protocol and add the OKX feed. One day.** A `PriceFeed`
 protocol and a coordinator owning several feeds, plus an `OKXFeed` that connects
