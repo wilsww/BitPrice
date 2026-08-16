@@ -393,14 +393,16 @@ Binance or Coinbase can satisfy, since both have delisted it; KuCoin and Kraken
 both carry it, and of those two only KuCoin passes the 6h candle gate.
 
 ### Make the price source a replaceable part
-Raised 2026-08-16, out of the price-source survey above. **Two steps, and they
-must not be combined** — see the last paragraph for why.
+Raised 2026-08-16, out of the price-source survey above. **Three steps — one,
+2a, 2b — and they must not be combined**; see "Why they must be separate" below.
 
 **Step one is done and was verified on the desktop 2026-08-16**; see the closing
 section of this entry. **Step two — adding OKX — is outstanding and is the
 second half of an agreed plan, not an open question.** It was split from step
 one on purpose so that a failing test could not be ambiguous between the two;
 the split was a sequencing decision, not a decision to drop the second half.
+Step two has since been split again into **2a (OKX polling, half a day) and 2b
+(the push-feed seam, one to two days)**, on the same reasoning.
 
 The survey earlier in this file argues OKX does not pay for itself on coverage,
 and that argument stands as written. It is an input to the decision, not the
@@ -472,21 +474,11 @@ carry the schema migration. Behaviour must not change: the same two venues, the
 same UI, the same disclosures. The existing 50 tests are the regression net for
 exactly this kind of pure structural change.
 
-**Step two — add OKX. Outstanding.** With step one landed this is a new file
-implementing one protocol plus the feed work described below, rather than a
-change threaded through five layers.
-
-**What step two costs.** The candidate, quote and candle
-paths are now a single `PriceSource` conformance and are close to mechanical.
-The cost that does not go away is the feed: OKX pushes over WebSocket, and
-`BinanceFeedController` was deliberately left Binance-specific in step one. Its
-290 lines of connection lifecycle — sleep/wake, lease rotation, failure
-backoff — are venue-neutral and worth sharing, but subscription and parsing are
-not, since Binance names its stream in the URL and wraps frames in
-`stream`/`data` while OKX sends `{"op":"subscribe",...}` after connecting and
-returns `{"arg":…,"data":[…]}`. Extracting that seam is the real work. A venue
-that only polls would skip it entirely and land near the half-day estimate.
-Estimate for OKX including the feed seam: one to two days.
+**Step two — add OKX. Outstanding, and it splits again.** Reading the code
+after step one landed showed the work is not one piece. Three of the four parts
+are additive and touch nothing that already works; the fourth rewrites the
+connection layer. Splitting them costs nothing and buys the same thing the
+step one/two split bought: a failing test that can only mean one thing.
 
 Its technical feasibility is already established rather than assumed — the
 WebSocket was connected to from a development machine and pushed live ticker
@@ -494,22 +486,76 @@ frames, and the 6H candles were fetched directly. See the OKX paragraph in the
 survey above for both. What remains is the work, not the question of whether it
 can be done.
 
-**Why they must be separate.** Combined, a failing test cannot distinguish a
-restructuring mistake from a mis-wired new venue. Separated, step one has a
-green baseline it must reproduce exactly.
+#### Step 2a — OKX as a polling source. Half a day, additive.
 
-**The risk that needs stating.** Collapsing the two mapping fields into one is a
-schema change, and schema changes on this app land in the recovery path that was
-hardened earlier in this session. A migration bug does not produce a crash; it
-produces a user whose watchlist is in read-only recovery mode. This is the only
-part of the work that touches user data and it deserves the most test attention.
-The feed controller is the other substantial piece: the 290 lines of connection
-lifecycle in `BinanceFeedController` (sleep/wake, lease rotation, failure
-backoff) are genuinely venue-neutral, but subscription and parsing are not —
-Binance names its stream in the URL and wraps messages in `stream`/`data`, while
-OKX subscribes with a message after connecting. Generalising means extracting
-the protocol-specific part and keeping the lifecycle shared, which is real work
-rather than a rename.
+Everything except the push feed. OKX has a full REST ticker, so it can ship as
+`.polled(seconds: 60)` — the same liveness Coinbase runs on today — and be a
+usable venue: visible in the picker, quoted, charted, alertable.
+
+- **`OKXPriceSource`.** A new conformance next to `CoinbasePriceSource`, which
+  is the working template. Three new methods on `RESTClients` (candidates,
+  ticker, candles) with their `Decodable` types, then one line added to
+  `configuredPriceSources`. No existing call site changes.
+- **`Venue.okx`.** One case. The DTO shape does not change, so this is not a
+  schema version bump — but it is still **one-way for user data**: a v2 file
+  containing `"okx"` will fail to decode on a build that predates the case, and
+  `Venue` is decoded as part of `MappingDTO`. The pre-2a `watchlist.json` should
+  be backed up the same way the v1→v2 migration was, and for the same reason.
+- **The UI needs nothing.** Step one made the polling disclosure derive from
+  `liveness` and the no-market message derive from `configuredSourceNames`, so
+  both pick up a third venue on their own. Test 22g pins that seam and should be
+  extended rather than replaced.
+
+**`VenueCandidateOrdering` is a product decision, not a mechanical one.** Its
+final tie-break is `venue.rawValue` alphabetically, so today `binance` sorts
+before `coinbase`. That ordering has always been an accident of spelling rather
+than a ranking. Adding a third venue makes the accident visible: `okx` sorts
+last, on every ticker, forever. Whether venues should carry an explicit
+preference order is a question about which exchange a user should be offered
+first — it needs an answer before 2a ships, and the answer is not the compiler's.
+
+#### Step 2b — the feed seam. One to two days, and the real risk.
+
+`BinanceFeedController` is the one thing step one deliberately did not
+abstract, and it is not a thin wrapper. Its 290 lines carry the app's only real
+concurrency-correctness machinery: three-way identity checking across
+`configurationID`, `connectionID` and `taskIdentifier` (`callbackIsCurrent`),
+lease timeouts, failure backoff, sleep/wake. `AppModel` holds it by concrete
+type, not by protocol, and `feedDidAccept` filters on
+`mapping?.exchange == .binance`, so an OKX tick reaching that method today would
+be dropped.
+
+The lifecycle machinery is genuinely venue-neutral and worth sharing. What is
+not shareable is subscription and parsing: Binance names its streams in the URL,
+which is why `maximumCombinedStreamURLBytes` exists at all, while OKX connects
+first and then sends `{"op":"subscribe",…}`, returning `{"arg":…,"data":[…]}`.
+`replaceProducts` therefore means "reconnect to a new URL" on one venue and
+"send an unsubscribe and a subscribe" on the other. The same method name cannot
+carry both implementations.
+
+Doing this properly means extracting a `PriceFeed` protocol and a controller
+that owns several feeds, leaving each venue's identity checking inside its own
+implementation. That is a rewrite of the connection layer. The existing feed
+tests all name `BinanceFeedController` concretely and will move with it.
+
+If 2b is never done, OKX stays on a 60-second poll and says so in the UI. That
+is a real product state, not a broken one.
+
+**Why they must be separate.** Each split isolates one class of failure.
+Combined, step one and step two leave a failing test unable to distinguish a
+restructuring mistake from a mis-wired new venue. Combined, 2a and 2b leave it
+unable to distinguish a bad OKX mapping from a broken connection layer — and 2b
+touches the only code in the app with real concurrency-correctness machinery, so
+that is exactly the distinction worth keeping.
+
+**The risk that needs stating.** Step one collapsed two mapping fields into one,
+which is a schema change, and schema changes on this app land in the recovery
+path hardened earlier in this session. A migration bug does not produce a crash;
+it produces a user whose watchlist is in read-only recovery mode. That work is
+done and verified against a real file, but the same exposure returns in a
+smaller form in 2a: adding `Venue.okx` does not change the DTO shape, yet a file
+containing it cannot be read by any build that predates the case. Both times,
+user data is the thing at stake and deserves the most test attention.
 
 ---
 
