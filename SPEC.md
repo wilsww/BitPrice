@@ -2,6 +2,13 @@
 
 ## 0. Purpose and normative language
 
+> **SUPERSEDED 2026-08-16 (ui22 and price-source replacement 2b-2).** The
+> purpose sentence's 24h-only chart and Binance-only connection wording were
+> replaced by selectable 24h/7d/30d charts and independent Binance/OKX feed
+> authorization within the same main-actor serialization domain. Retained
+> because it records the original bounded product and concurrency goal; the
+> no-third-party-dependency and normative-language rules remain current.
+
 BitPrice is a personal macOS menu-bar application that shows live cryptocurrency prices, a configurable watchlist, truthful 24-hour charts, and durable price alerts. This document is the complete implementation contract. An implementer must not need `IMPLEMENTATION.md` or any planning file.
 
 “Must” is required behavior. “May” is optional. Values described as runtime-only must never be encoded. No third-party dependency is permitted.
@@ -9,6 +16,14 @@ BitPrice is a personal macOS menu-bar application that shows live cryptocurrency
 The design deliberately uses one `@MainActor` serialization domain for the watchlist, live quotes, alert transitions, and Binance connection authorization. This removes the cross-actor epoch handoff and buffered-event invalidation problems rather than attempting to patch them.
 
 ## 1. Fixed measured facts
+
+> **SUPERSEDED 2026-08-16 (price-source replacement steps 2a and 2b-2).**
+> The measured CoinGecko quota conclusion remains valid, but the clause that
+> prices must come from the Binance WebSocket no longer describes the product.
+> Binance and OKX now push prices through independent WebSocket feeds, while
+> Coinbase is a primary source polled every 60 seconds. Retained because it
+> records why CoinGecko is an identity/search service rather than a live-price
+> source and why the original Binance feed existed.
 
 The following were established by direct measurement on the target machine and are not design choices:
 
@@ -29,6 +44,15 @@ The following were established by direct measurement on the target machine and a
 
 ### 2.1 Menu bar and panel
 
+> **SUPERSEDED 2026-08-16 (ui1, ui5, ui23, and ui28).** The approximately
+> 380-point panel, per-row sparkline, mapping-inspection controls, and
+> Binance-then-Coinbase quote-asset preference below were replaced by fixed
+> dimensions per text-size preference and one bottom detail chart for the
+> selected row. An item now has one mapping, so its quote asset needs no venue
+> preference rule. Retained because the old row-level chart and dual-mapping
+> design explain why selection, detail sizing, and source disclosure are
+> explicit in the current panel.
+
 Use SwiftUI `MenuBarExtra` with `.menuBarExtraStyle(.window)`. The app has no ordinary app window and no Dock icon.
 
 The menu-bar title is `SYMBOL price` for the primary item when it has a quote. It is `BitPrice` when the watchlist is empty, the primary reference is absent, or the primary has no quote. Use grouping separators, two fractional digits for prices at least 1, and up to six fractional digits below 1.
@@ -45,7 +69,40 @@ The quote asset is derived from the mapping for `Quote.source`: Binance normally
 
 Only three user-facing connection presentations exist: `live`, `stale`, and `offline`. Internal lifecycle states are not additional presentations.
 
+#### 2.1.1 Current panel and selected detail
+
+The panel dimensions are fixed by the persisted text-size preference:
+
+| Preference | Width | Height |
+|---|---:|---:|
+| Small | 560 | 750 |
+| Medium | 660 | 780 |
+| Large | 760 | 880 |
+| Extra Large | 860 | 980 |
+
+The list and detail area share the finite height below the header and banners.
+The detail receives 40 percent and the list receives the remainder. The list is
+selectable and every watch row shows the primary control, symbol, selected
+mapping's quote asset, row state, price, change, and alert control; it contains
+no chart. Exactly one detail area appears below the list for the selected row.
+It contains the global range picker, that row's chart, source/quote disclosure,
+CoinGecko ID, reorder controls, and delete control. Selection initially resolves
+to the primary item, then the first item, and is repaired after deletion.
+
+Panel text uses AppKit preferred text-style sizes multiplied by 0.85, 1.0, 1.2,
+or 1.45 for Small through Extra Large. Medium therefore uses the platform base
+size. The complete framed panel has a regular-material background.
+
 ### 2.2 Watchlist semantics and bounds
+
+> **SUPERSEDED 2026-08-16 (ui28 and price-source replacement step one).** The
+> CoinGecko-ID uniqueness rule, the requirement for at least one of two named
+> mappings, and the dual-mapping BTC seed below were replaced by exact-market
+> uniqueness and one optional `mapping` field that validation requires to be
+> present. A coin may be watched in several markets because selectable quote
+> assets make those rows meaningfully different; only the same product on the
+> same venue is a duplicate. Retained because it records the identity rule and
+> seed shape that schema v1 files still carry into migration.
 
 The watchlist order is user-controlled. `primaryItemID` is a UUID, not a row index. Deleting the primary selects the first remaining item. Deleting the last item sets the primary to `nil`. An empty watchlist is valid and must remain empty across relaunch.
 
@@ -63,7 +120,29 @@ The first launch seeds exactly one item:
 
 The seed UUID is generated once and immediately persisted. A missing file means first launch; a successfully decoded empty file never reseeds. If the initial seed write fails, run with that in-memory seed in read-only mode, disable alerts/edits, and show the write error; do not pretend the first launch was durable.
 
+#### 2.2.1 One market per item
+
+Every current-schema item has exactly one `VenueMapping`. The mapping stores its
+venue, exact product ID, base asset, quote asset, and provenance; no venue may
+substitute for it at runtime. A CoinGecko project may appear in more than one
+row, including more than one market on the same venue. Product IDs must be
+unique within each venue, while identical strings used by different venues do
+not collide. Price ticks are routed by both venue and product ID.
+
+The first-launch BTC seed has one curated Binance `BTCUSDT` mapping. It has no
+Coinbase or OKX mapping.
+
 ### 2.3 Search and explicit venue confirmation
+
+> **SUPERSEDED 2026-08-16 (ui26 and ui28).** The two-venue candidate fetch,
+> USDT/USD quote restrictions, one-answer-per-venue flow, “No market” choices,
+> duplicate-CoinGecko rejection, and dual-ID detail requirement below were
+> replaced by one combined list from every configured `PriceSource`, any legal
+> quote asset, and one mandatory selected market. The two-answer ceremony
+> stopped representing a real choice after runtime fallback was removed, and
+> widening quote assets made the combined list useful. Retained because it
+> records the confirmation boundary that still prevents a ticker match from
+> becoming an identity assertion.
 
 Search CoinGecko with:
 
@@ -81,6 +160,35 @@ The next sheet fetches and displays candidates from both venues:
 For each venue the user must explicitly choose one candidate or “No market.” The sheet must say, “Candidates matched by ticker; verify the market.” Confirmation remains mandatory even when there is one candidate. Both venues cannot be “No market.” Persist the exact selected IDs, base assets, quote assets, and user-confirmed provenance. Never reconstruct a product ID from a symbol on launch, retry, fallback, or chart refresh.
 
 Before saving, reject a duplicate CoinGecko ID, a venue product already used by another row, the 25-item limit, or a prospective combined URL over 2,048 bytes. Every row’s detail view exposes its persisted CoinGecko and venue IDs so a mistaken confirmation is visible.
+
+#### 2.3.1 Current combined market confirmation
+
+After a CoinGecko result is selected, request candidates concurrently from all
+configured price sources. Binance accepts every `TRADING` instrument whose base
+asset matches case-insensitively. Coinbase accepts every matching-base `online`
+product that is neither trading-disabled nor cancel-only. OKX accepts every
+matching-base SPOT instrument whose state is `live`. No source restricts the
+quote asset.
+
+Combine and sort all candidates by quote class: USD and USDT first, then USDC,
+then FDUSD, then every other quote. Within a class sort case-insensitive quote
+asset, venue raw value, and product ID, with the exact product ID as the final
+stable tie-break. Display `base/quote` and `Venue.displayName`; the product ID is
+persisted but is not repeated in the candidate row.
+
+The user must choose exactly one candidate. Confirmation persists that
+candidate as the item's only mapping with user-confirmed provenance. If no
+source returns a candidate, name the configured sources and offer a return to
+search. The confirmation must disclose that ticker matches are string guesses,
+that the selected market is the row's only price source, and that a stopped
+selected feed stops price updates and alert evaluation. For a polled source it
+must also derive the poll interval and missed-breach warning from
+`SourceLiveness`; no venue name or interval is hardcoded in the view.
+
+Before saving, reject only an exact product duplicate within its venue, the
+25-item limit, or a prospective Binance combined-stream URL over 2,048 bytes.
+The selected detail always exposes the CoinGecko ID and identifies the chart's
+venue and quote asset.
 
 ### 2.4 Alerts
 
@@ -128,6 +236,17 @@ This is one executable module, not Swift packages.
 
 ### 3.2 Ownership and isolation
 
+> **SUPERSEDED 2026-08-16 (price-source replacement steps one, 2b-1, and
+> 2b-2).** The concrete `BinanceFeedSink`, `BinanceTick`, and
+> `BinanceLifecycle` names, the single feed state, the Binance-bound delegate,
+> and direct `AppModel` ownership of one controller below were replaced by
+> venue-neutral source/feed protocols, venue-bearing ticks, per-venue lifecycle
+> state, and a fan-out coordinator. Each feed still owns its own main-actor
+> identity, lease, and backoff machinery because sharing mutable lifecycle state
+> would allow one venue's outage to disturb another. Retained because the
+> main-actor authorization boundary and exact persisted-mapping lookup remain
+> the concurrency contract the abstractions must preserve.
+
 `@MainActor final class AppModel` is the sole owner of UI-visible and persisted state. It owns the items, primary ID, runtime quotes, chart series, request tokens, errors, recovery mode, the user-facing connection presentation, and long-lived periodic tasks.
 
 `@MainActor final class BinanceFeedController` owns the Binance product set, configuration UUID, current connection UUID, current URL-session task identifier, current suspending-clock open instant, `URLSessionWebSocketTask`, receive task, lease task, retry task, retry counter, and authoritative detailed lifecycle state. It has no `AsyncStream` and no continuation.
@@ -148,7 +267,52 @@ All value types crossing an actor boundary explicitly conform to `Sendable`. Per
 
 `WebSocketDelegateAdapter` implements `URLSessionWebSocketDelegate`. The `URLSession` is created with this delegate and `OperationQueue.main`. Its nonisolated delegate entry points extract only `webSocketTask.taskIdentifier` and a `NetworkFailure`; they do not capture or forward the task or raw `Error`. They schedule a main-actor call to `BinanceFeedController.didOpen(taskIdentifier:)` or `didClose(taskIdentifier:failure:)`. The controller accepts either only when the integer task ID is still current. `didOpen` is the concrete signal that changes connecting to connected and records the current `SuspendingClock.Instant`.
 
+#### 3.2.1 Price-source and price-feed interfaces
+
+`PriceSource` is `Sendable` and supplies:
+
+- `venue: Venue`;
+- `liveness: SourceLiveness`;
+- `candidates(symbol:)` returning normalized `VenueCandidate` values;
+- `quote(productID:)` returning `SourceQuote`;
+- `candles(productID:range:start:end:)` returning normalized `CandlePoint`
+  values;
+- `supports(_:)` declaring chart-range support as data.
+
+`SourceLiveness` is exactly `push` or `polled(seconds: Int)`. Binance and OKX
+are `push`; their REST `quote` methods reject calls because quotes arrive through
+their feeds. Coinbase is `polled(seconds: 60)`. `AppModel` starts a separate
+suspending-clock quote loop for every configured polled source and uses the same
+value to decide whether the add flow and alert editor show a polling disclosure.
+All three current sources support every current `ChartRange`. Configuration
+order is Binance, Coinbase, OKX, so the three-source sentence is “Binance,
+Coinbase or OKX”.
+
+`PriceFeed` is a main-actor protocol with `venue`, `attachSink`,
+`replaceProducts`, `suspendForSleep`, `resumeAfterWake`, and `shutdown`.
+`PriceFeedSink` receives a venue-bearing `PriceTick` and receives lifecycle
+changes with an explicit venue. `PriceFeedCoordinator` owns the configured
+feeds, passes each feed only the product set for its venue, forwards lifecycle
+and tick callbacks without relabeling or merging them, and fans out sleep, wake,
+and shutdown. `AppModel.connectionStates` remains keyed by venue.
+
+Binance and OKX each own an independent lifetime session, delegate adapter,
+configuration UUID, connection UUID, task-identifier registry, receive task,
+lease task, retry task, and client-wide failure counter. The coordinator owns
+none of this state. `WebSocketDelegateAdapter` is constructed with a venue and
+forwards a registered `(taskIdentifier, connectionID)` pair to a venue-neutral
+`WebSocketLifecycleReceiving` receiver.
+
 ### 3.3 AppModel lifecycle
+
+> **SUPERSEDED 2026-08-16 (ui26, ui27, and price-source replacement 2b-2).**
+> The direct Binance-sink attachment, fallback eligibility pass, singular
+> Binance product replacement, fallback loop, and Coinbase-only special case in
+> the startup/empty-list sequence below were replaced by coordinator fan-out,
+> per-source polling loops, and per-venue product sets. This removes runtime
+> venue substitution while keeping immediate first work and sleep/wake
+> reconciliation. Retained because the save-before-publish transaction and
+> immediate-versus-periodic ordering remain required.
 
 Startup order is fixed:
 
@@ -174,9 +338,40 @@ If saving fails, the current state and network configuration remain unchanged an
 
 When the watchlist becomes empty, `AppModel` cancels the fallback, candle, and freshness tasks and passes an empty Binance set. Adding the first item performs the immediate cycles and restarts those same tasks. A Coinbase-only nonempty list keeps all three periodic tasks even though its Binance set is empty.
 
+#### 3.3.1 Current network lifecycle
+
+After persistence is loaded or a recovery seed is published, `AppModel`
+attaches itself through `PriceFeedCoordinator`. Starting network work passes a
+dictionary of exact persisted product-ID sets keyed by venue; each feed receives
+its own set or an empty set. For a nonempty watchlist, `AppModel` immediately
+requests quotes from every polled source, refreshes every chart, starts one quote
+loop per polled source at that source's declared interval, starts the 15-minute
+candle loop, and starts the 15-second freshness loop.
+
+Every structural edit still saves the complete validated draft before
+publication. After publication it clears runtime state for removed or remapped
+items, increments `marketRevisions` only for a remap, redistributes per-venue
+feed product sets, and reconciles periodic loops. An accepted price tick on the
+same mapping never increments `marketRevisions` and never cancels an already
+current chart request.
+
+An empty watchlist gives every feed an empty set and cancels all quote, candle,
+and freshness loops. Wake resumes every feed, immediately polls configured
+polled sources, refreshes all charts, and creates missing periodic loops without
+replaying missed intervals. Sleep cancels search, REST work, and periodic loops
+before suspending every feed.
+
 ## 4. Domain and persisted data
 
 ### 4.1 Persisted shape
+
+> **SUPERSEDED 2026-08-16 (price-source replacement step one, plus ui4, ui5,
+> ui17, ui18, and ui22).** Schema 1, the two named mapping properties, and the
+> three-field root below were replaced by schema 2, one venue-bearing mapping,
+> and persisted global alert, text-size, chart-range, and alert-default values.
+> The mapping collapse removes venue identity from the storage field name so a
+> venue can be added without another schema change. Retained because it is the
+> exact v1 shape the registered migration must continue to decode.
 
 The current schema version is `1`. The JSON root contains exactly:
 
@@ -198,7 +393,35 @@ A venue mapping contains exchange, exact product ID, base asset, quote asset, an
 
 Quotes, charts, active source, lifecycle state, request/configuration/connection UUIDs, retry counters, task handles, and monotonic instants are runtime-only.
 
+#### 4.1.1 Current schema-2 shape
+
+The current schema version is `2`. The JSON root contains:
+
+- `schemaVersion: Int`;
+- ordered `items: [WatchItem]`;
+- `primaryItemID: UUID?`;
+- `alertsEnabled: Bool`;
+- `textSize: String` (`small`, `medium`, `large`, or `extraLarge`);
+- `chartRange: String` (`24h`, `7d`, or `30d`);
+- `defaultAlertCooldownSeconds: Int`;
+- `defaultAlertHysteresisPercent: String` containing an exact decimal.
+
+A schema-2 item contains UUID, CoinGecko ID, display symbol and name, one
+optional `mapping`, and one optional alert. Root validation requires the mapping
+to be present. `MappingDTO.exchange` stores the `Venue` raw value, so Binance,
+Coinbase, and OKX share one wire shape.
+
+The shipped and missing-legacy defaults are: global alerts enabled, Medium text,
+24h chart range, 30-second alert cooldown, and 10-percent hysteresis. Unknown
+text-size and chart-range strings normalize to Medium and 24h rather than
+entering recovery. Current-schema required keys otherwise remain required.
+
 ### 4.2 Runtime values
+
+> **SUPERSEDED 2026-08-16 (ui22 and price-source replacement steps 2b-1 and
+> 2b-2).** `BinanceTick` was replaced by venue-bearing `PriceTick`, and
+> `ChartSeries` gained its selected range. Retained because the remaining price,
+> time, and sendability requirements still define the normalized boundary.
 
 `BinanceTick` supplies product ID, `Decimal` price, `Decimal` 24-hour percent, venue event `Date`, and current `ContinuousClock.Instant` receipt time.
 
@@ -208,7 +431,38 @@ Quotes, charts, active source, lifecycle state, request/configuration/connection
 
 `NetworkFailure` is a sendable value with domain, integer code, and human-readable message. It is not a raw `Error` existential.
 
+#### 4.2.1 Current normalized runtime values
+
+`PriceTick` supplies venue, product ID, positive `Decimal` price, finite
+`Decimal` 24-hour percent, venue event `Date`, and current monotonic receipt
+instant. `AppModel` accepts it only for an item whose single mapping matches both
+venue and product ID.
+
+`ChartSeries` additionally records its `ChartRange`. `ChartRequestToken` records
+request UUID, item UUID, venue, product ID, range, market revision, and exact
+requested start/end. A chart completion is current only while the item's mapping,
+global selected range, token, and remap-only market revision still match.
+
+Feed lifecycle is stored as `[Venue: FeedLifecycle]`; polled request activity is
+stored per item. Neither collection is persisted.
+
+#### 4.2.2 Venue display names
+
+`Venue.displayName` is the only user-visible spelling contract for venue names:
+Binance, Coinbase, and OKX. Never derive presentation with
+`rawValue.capitalized`; it renders OKX incorrectly as “Okx”. Candidate rows,
+configured-source sentences, chart disclosures, polling warnings, WebSocket
+close failures, and duplicate-product validation must use `displayName`.
+
 ### 4.3 Root validation
+
+> **SUPERSEDED 2026-08-16 (ui28 and price-source replacement step one).** The
+> CoinGecko-ID uniqueness, separate Binance/Coinbase mapping passes, at-least-one
+> mapping rule, and named-property exchange check below were replaced by one
+> required mapping per item and product uniqueness grouped across every `Venue`
+> case. CoinGecko identity is intentionally reusable across distinct markets.
+> Retained because these were the semantic rules applied to legacy dual-mapping
+> files before migration.
 
 After decoding or migration and before every save, one validator enforces all of the following:
 
@@ -226,7 +480,30 @@ After decoding or migration and before every save, one validator enforces all of
 
 A decoded semantic violation is treated exactly like malformed JSON: enter recovery mode and do not normalize or silently repair it.
 
+#### 4.3.1 Current root validation
+
+The current validator requires schema 2, at most 25 items, unique item UUIDs,
+valid global alert-default bounds, and a valid primary reference or `nil` for an
+empty list. It does not require unique CoinGecko IDs.
+
+Every item must have nonempty identity fields and exactly one present mapping.
+The mapping must have nonempty product, base, and quote fields and valid venue
+and provenance enum values. Group mappings by `exchange`; within every case in
+`Venue.allCases`, product IDs must be unique. The same product-ID string may
+exist on different venues. Every alert must satisfy §2.4.
+
+Finally, construct the Binance combined-stream URL from only Binance mappings
+and reject it above 2,048 UTF-8 bytes. Coinbase and OKX product IDs do not enter
+that URL.
+
 ### 4.4 Versioned decoding and migration
+
+> **SUPERSEDED 2026-08-16 (price-source replacement step one).** Version 1 is
+> no longer current and v0 no longer stops at v1. Registered paths now compose
+> v0→v1→v2 or v1→v2 before current validation, while v2 decodes directly. The
+> migration chooses Binance when both legacy mappings exist because that was
+> the runtime market the user already saw. Retained because exact historical
+> decoding and the no-guess rule remain necessary to protect old watchlists.
 
 Do not use one synthesized decoder for every version. Synthesized `Decodable` fails when a non-optional key such as `schemaVersion` or `isArmed` is absent.
 
@@ -247,7 +524,33 @@ For future versions, maintain an explicit migration registry. A positive older v
 
 A successfully migrated v0 value is atomically saved as v1 before networking starts. If that save fails, keep the migrated state visible but make it read-only, disable alerts, preserve the original file, and report the persistence failure.
 
+#### 4.4.1 Current migration registry
+
+`schemaDispatch` registers versions 0, 1, and 2. A v0 file decodes with the v0
+DTO, applies the historical latch defaults in the v0→v1 transform, then applies
+v1→v2. A v1 file decodes with `V1StateDTO` and applies v1→v2. A v2 file decodes
+with `V2StateDTO` directly. Every path ends in the one current root validator.
+
+Before collapsing a v1 item, validate that a `binanceMapping` says `binance`
+and a `coinbaseMapping` says `coinbase`, validate mapping enum values and
+fields, and reject duplicate product IDs within either legacy venue. Select the
+Binance mapping when both are present; otherwise select the one present. An item
+with neither reaches current validation and enters recovery.
+
+Preserve v1 root alert, text-size, chart-range, and alert-default fields through
+the transform. Missing additive v1 keys use their shipped defaults. A migrated
+value is atomically saved as v2 before networking; save failure leaves the
+migrated state visible but read-only and preserves the source file.
+
 ### 4.5 File location, atomicity, and recovery
+
+> **SUPERSEDED 2026-08-16 (recovery-mode repair and price-source replacement
+> step one).** Reset no longer overwrites a readable protected file without a
+> copy, and it writes a schema-2 seed rather than v1. The previous reset silently
+> destroyed the bytes the banner said were preserved; the replacement first
+> writes a fixed adjacent recovery backup and aborts if that backup write fails.
+> Retained because the original preservation promise explains why reset now has
+> a separate backup precondition.
 
 The only persisted application-data file is:
 
@@ -268,6 +571,19 @@ Malformed JSON, semantic invariant failure, unknown older schema, and newer sche
 
 Reset atomically writes a fresh v1 BTC seed, exits recovery, publishes it, and starts networking. A Reset write failure leaves recovery and the original file intact.
 
+#### 4.5.1 Current recovery reset
+
+Recovery uses the fixed adjacent backup path
+`~/Library/Application Support/BitPrice/watchlist.recovery-backup.json`.
+Before replacing a readable protected file, atomically write its current bytes
+there; each reset replaces the prior backup rather than accumulating copies. A
+backup write failure aborts reset and leaves recovery and the original file
+intact.
+
+If the original itself cannot be read, no backup can be made and reset may
+continue. Reset then atomically writes the fresh schema-2 Binance BTC seed,
+exits recovery, clears runtime quote/chart state, and restarts network work.
+
 ### 4.6 Atomic single-instance lock
 
 Before loading `watchlist.json`, open `~/Library/Application Support/BitPrice/instance.lock` with Darwin `open` using create/read-write flags and mode `0600`, then acquire `flock(fd, LOCK_EX | LOCK_NB)`. Keep the file descriptor open for the process lifetime.
@@ -277,6 +593,14 @@ Failure with `EWOULDBLOCK` means another instance owns the lock: exit before loa
 ## 5. Binance live-feed contract
 
 ### 5.1 Public interface and supplied inputs
+
+> **SUPERSEDED 2026-08-16 (price-source replacement steps one and 2b-2).**
+> `BinanceLifecycle` and the Binance-specific sink names below were replaced by
+> `FeedLifecycle`, `PriceTick`, `PriceFeedSink`, and `PriceFeed`. The controller
+> still supplies the same lifecycle methods and owns the same state; the rename
+> permits a second feed without pretending the connection implementations are
+> interchangeable internally. Retained because the listed Binance operations
+> and absence of an event stream remain current.
 
 `BinanceFeedController` exposes these main-actor members:
 
@@ -311,6 +635,13 @@ Accept only a string or data message that decodes to the expected wrapper, names
 
 ### 5.3 Connection identity and stale-result exclusion
 
+> **SUPERSEDED 2026-08-16 (feed lifecycle hardening).** Only the retry-reset
+> clauses below are superseded: an exact product-set change and sleep/wake no
+> longer reset `transportFailureAttempt`. The counter is client-wide and
+> survives both, so subscription churn cannot erase evidence of a repeated
+> transport outage. Retained because the three-way identity authorization and
+> synchronous invalidation ordering remain unchanged.
+
 The controller holds a configuration UUID and a connection UUID. Both are runtime-only.
 
 `replaceProducts(_:)` compares normalized sets inside the controller:
@@ -328,6 +659,14 @@ This ordering is the authorization barrier: new identity is installed synchronou
 Autonomous retry uses the existing configuration UUID and a new connection UUID, so it follows the same check without handing identity to a consumer.
 
 ### 5.4 Start, receive, retry, lease, and set changes
+
+> **SUPERSEDED 2026-08-16 (feed lifecycle hardening).** Only the statements
+> below that reset retry attempts on an exact set replacement or wake are
+> superseded. Lease completion after at least 60 awake seconds of a matching
+> delegate-confirmed open is now the sole reset path; set changes and wake
+> reconnect immediately but retain outage history. Retained because preserving
+> the backoff ladder prevents repeated short-lived failures from returning to
+> one-second retries.
 
 For a current nonempty configuration:
 
@@ -348,6 +687,13 @@ If the product set changes during connect, receive, lease sleep, or backoff, the
 
 ### 5.5 Half-open and quiet-market policy
 
+> **SUPERSEDED 2026-08-16 (ui26 and price-source replacement step 2b-1).** The
+> fallback references and singular Binance-state assumption below were replaced
+> by one fixed market per item and lifecycle state keyed by venue. Quote age may
+> stale a quiet row but never changes its source. Retained because the no-ping,
+> no-product-deadline, and five-minute lease policy still applies to Binance and
+> also supplies OKX's keepalive bound.
+
 The app has no application-visible Pong timestamp, and it must not send its own Pings. A per-product no-tick deadline is also not a reliable transport test for a legitimately quiet market. Therefore:
 
 - ticker silence never marks a product dead and never triggers a reconnect;
@@ -359,6 +705,60 @@ The app has no application-visible Pong timestamp, and it must not send its own 
 
 This is intentionally bounded repair rather than a claim that Foundation exposes an operation it does not. The cost is one brief planned reconnect every five awake minutes.
 
+### 5.6 OKX live-feed contract
+
+`OKXFeed` conforms to `PriceFeed` and owns the same lifecycle shape as Binance,
+but it does not share mutable lifecycle machinery with Binance. Its endpoint is:
+
+`wss://ws.okx.com:8443/ws/v5/public`
+
+The endpoint is bare. After the matching delegate `didOpen`, send exactly one
+UTF-8 JSON subscription frame with product IDs sorted into one batched `args`
+array:
+
+```json
+{"op":"subscribe","args":[{"channel":"tickers","instId":"BTC-USDT"}]}
+```
+
+The feed remains `connecting` until this send succeeds, then becomes
+`connected`. Encoding or send failure fails the current connection and enters
+backoff. A changed product set invalidates and closes the current socket, opens
+a replacement, and sends one fresh complete subscription after that socket
+opens. The current implementation sends no unsubscribe frame and never mutates
+a live subscription in place.
+
+An event frame is not price data. Once the feed is connected, ignore
+subscription acknowledgements; an event frame whose `event` is `error` fails
+the current connection using its string `code` when numeric and its `msg` when
+present. Frames received while the lifecycle is not connected are ignored.
+Receive errors and matching delegate closes use the same failure path. Every event, send
+completion, receive completion, lease completion, retry completion, and
+delegate callback is authorized against the feed's current configuration UUID,
+connection UUID, and registered integer task identifier before it can mutate
+state or reach the sink.
+
+For a ticker frame require `arg.channel == "tickers"`, require `arg.instId` to
+be currently configured, and require every consumed data element's `instId` to
+match the argument and current set. Consume:
+
+- `last`: positive finite decimal price string;
+- `open24h`: present, finite, positive decimal string;
+- `ts`: nonnegative millisecond timestamp string.
+
+Compute change as `(last - open24h) / open24h × 100`, stamp the resulting
+`PriceTick` with venue `okx`, and convert `ts` from milliseconds to `Date`.
+Malformed values, event frames, and unconfigured products produce no tick. Set
+`maximumMessageSize` to 1 MiB before resuming the task.
+
+OKX uses the same exact retry delays as Binance: 1, 2, 4, 8, 16, then 30 awake
+seconds, capped at 30. Its failure counter is feed-local and survives product
+set changes and wake. It resets only when the five-minute lease completes for
+the current identity after a matching delegate open has remained open for at
+least 60 awake seconds. Lease completion rotates the socket and subscription.
+Sleep cancels subscription/receive/lease/retry work and closes the socket; wake
+connects immediately for a retained nonempty set. The five-minute rotation is
+also the OKX keepalive policy; no application ping loop exists.
+
 ## 6. REST and chart contracts
 
 ### 6.1 Common HTTP rules
@@ -368,6 +768,17 @@ All REST URLs use `URLComponents` and exact persisted IDs. Every `URLRequest` ha
 On cancellation, non-2xx, timeout, or decode failure, retain prior valid runtime data and update the relevant request status. Convert response status and required headers to sendable values inside the client actor.
 
 ### 6.2 Coinbase fallback
+
+> **SUPERSEDED 2026-08-16 (ui26 and ui27).** An item now has exactly one
+> market, chosen explicitly by the user, so there is nothing to fall back from
+> or to. Coinbase is a primary source only for a Coinbase-mapped item and polls
+> every 60 seconds. The entire eligibility coordinator and
+> `FallbackRequestToken` contract below is removed. In particular, an accepted
+> Binance tick no longer increments `marketRevisions`; that was a live defect
+> that repeatedly invalidated in-flight charts. The counter now increments only
+> when an item is remapped. Retained because the removed substitution and
+> per-tick revision rule explain both the single-market model and the chart race
+> regression tests.
 
 Stats use:
 
@@ -396,7 +807,33 @@ The request’s `Task` is canceled when a Binance tick makes the item ineligible
 
 The first accepted Binance tick immediately becomes active again, increments market revision, invalidates Coinbase work, and may visibly flap if Binance is unstable. If no Coinbase mapping exists, retain an old Binance quote as stale and show “No fallback market”; show unavailable only when there is no prior quote.
 
+#### 6.2.1 Coinbase primary polling
+
+`CoinbasePriceSource` declares `polled(seconds: 60)`. Poll only items whose
+single mapping is Coinbase, once immediately when network work starts or the
+item is added, then every 60 awake seconds. At most one quote request per item
+may be current. The source calls the same `/products/{id}/stats` endpoint and
+computes the same `SourceQuote` described below; invalid or nonpositive `open`
+still yields unavailable change rather than zero.
+
+Every request captures a request UUID, item UUID, exact mapping, source, and
+current remap revision. Accept completion only while that request UUID is still
+current, the item's venue and product ID still match, and the revision is
+unchanged. The common REST layer enforces the 15-second total deadline. An
+accepted result records completion as receipt time and enters alert evaluation.
+A failure retains any prior quote and records failed source activity. No
+Binance or OKX state participates in Coinbase request eligibility or acceptance.
+
 ### 6.3 Truthful 24-hour sparkline
+
+> **SUPERSEDED 2026-08-16 (ui1, ui22, ui23, and price-source replacement step
+> one).** The row sparkline, 24h-only range, 1h candle parameters, fixed
+> 90-minute gap, and Binance-then-Coinbase chart-source rule below were replaced
+> by one selected-row detail chart, three global ranges, range-derived gaps, and
+> the item's one fixed mapping through `PriceSource`. The original anti-flapping
+> purpose is now structural because quote and chart cannot choose different
+> venues. Retained because its timestamp, gap-preservation, and no-fabrication
+> principles still govern normalization and drawing.
 
 Do not use CoinGecko `sparkline_in_7d` for this chart. It has no timestamps and its point spacing/count is not contractual, so selecting the last 24 values cannot establish a 24-hour interval.
 
@@ -420,13 +857,95 @@ Refresh all nonempty rows immediately at launch/add/wake and every 15 awake minu
 
 CoinGecko’s batched sparkline endpoint remains a measured capability but is intentionally unused because it cannot satisfy the timestamp contract.
 
+#### 6.3.1 Current selectable chart contract
+
+`ChartRange` is the single source of the query window, venue parameter, and
+candle count:
+
+| Range | Lookback | Binance interval | Coinbase granularity | OKX bar | Count |
+|---|---:|---|---:|---|---:|
+| `24h` | 86,400 s | `15m` | 900 | `15m` | 96 |
+| `7d` | 604,800 s | `6h` | 21,600 | `6H` | 29 |
+| `30d` | 2,592,000 s | `1d` | 86,400 | `1D` | 31 |
+
+The range is one persisted global selection. Changing it clears every displayed
+series and refreshes every item. A chart request uses the item's sole mapping,
+requires that source to support the selected range, and includes the range in
+both its request token and resulting series so an older selection cannot land.
+
+For every source set `end = wallNow` and `start = end - range.lookbackSeconds`.
+Binance sends exact millisecond `startTime`/`endTime` and `limit`. Coinbase sends
+exact ISO-8601 `start`/`end` and its granularity. OKX sends only `instId`, `bar`,
+and `limit`, then local normalization trims the response to the exact window.
+
+Reject invalid timestamps and nonpositive closes. Remove out-of-window points,
+replace duplicate timestamps with the last decoded candidate, and sort ascending
+by timestamp. Draw x positions against the earliest and latest actual retained
+points, not array indices or the requested bounds. Break the path when adjacent
+points differ by more than 1.5 times the selected Coinbase granularity; the
+granularity is the shared duration table for all three ranges. Never interpolate
+a missing bucket.
+
+Refresh all rows immediately at launch/add/wake and every 15 awake minutes.
+Retain an older series after refresh failure and mark it failed; if the first
+request fails, record that separate failure so the UI distinguishes “could not
+be loaded” from a market with no supported chart. Selection retries a missing
+chart, and an already in-flight request is not canceled merely because a price
+tick arrived.
+
 ### 6.4 CoinGecko rate limiting
 
 CoinGecko is used only for user-initiated search. A 429 creates a client-wide search deadline. Parse `Retry-After` as either integer seconds or an HTTP date. Convert either form to a `ContinuousClock.Instant`; if absent or invalid, use 60 seconds. A search attempted before the deadline reports the remaining wait instead of issuing a request.
 
 CoinGecko is never polled for live prices.
 
+### 6.5 OKX REST contract
+
+All OKX REST responses decode an envelope whose `code` and `msg` are strings
+and whose `data` is an array. Require HTTP 2xx first, then require `code == "0"`.
+A nonzero code is an API failure even when HTTP status is 200; use its numeric
+value when parseable and include nonempty `msg` in the failure.
+
+Catalogue request:
+
+`GET https://www.okx.com/api/v5/public/instruments?instType=SPOT`
+
+Consume only `instId`, `baseCcy`, `quoteCcy`, and `state`. Accept only
+case-insensitive base matches whose state is exactly `live`; a `rebase`
+instrument is not a candidate.
+
+Ticker request:
+
+`GET https://www.okx.com/api/v5/market/ticker?instId={id}`
+
+Require exactly one data element. Consume string `last` and optional string
+`open24h`; require positive `last`, and compute `(last - open24h) / open24h ×
+100` only for a finite positive open. Otherwise return unavailable change. This
+decoder remains part of `RESTClients`, but `OKXPriceSource.quote` rejects calls
+and `AppModel` does not schedule it while OKX declares push liveness.
+
+Candle request:
+
+`GET https://www.okx.com/api/v5/market/history-candles?instId={id}&bar={bar}&limit={count}`
+
+Do not send `startTime`, `endTime`, `after`, or `before`. Rows arrive
+newest-first. Consume index 0 as nonnegative milliseconds and index 4 as the
+positive close, pass candidates once through common normalization, and do not
+reverse them separately. The final points are ascending and window-trimmed.
+
+OKX has its own token-bucket pacer at 10 tokens per second with burst 20; each
+catalogue, ticker, or candle call costs one. HTTP 429 applies the common
+`Retry-After` backoff before the failure is surfaced.
+
 ## 7. Quote freshness and connection presentation
+
+> **SUPERSEDED 2026-08-16 (ui26, ui27, and price-source replacement steps
+> 2b-1 and 2b-2).** The active-source/fallback model, singular Binance state,
+> Coinbase eligibility request state, and fallback reconciliation below were
+> replaced by one fixed source per item, per-venue push lifecycle state, and
+> per-item polled request activity. A source never changes because another feed
+> connects or fails. Retained because the 120-second freshness boundary and
+> worst-row aggregate rule remain current.
 
 Quote age is `continuousNow - receivedInstant`. A Binance or Coinbase quote is fresh through 120 seconds and stale when age is strictly greater than 120 seconds. Clamp any computed duration at zero defensively, although monotonic time should not move backward.
 
@@ -442,9 +961,36 @@ The panel’s single presentation is the worst row state: offline outranks stale
 
 Binance’s detailed `state` is read directly from `BinanceFeedController` on the main actor. Coinbase request state is owned directly by `AppModel`. No consumer reconstructs current state from historical events.
 
+### 7.1 Current per-source presentation
+
+Quote freshness is 120 continuous seconds for every venue. First require the
+quote source to equal the item's sole mapping venue. For a push source, a fresh
+quote is `live` only while that venue's `connectionStates` entry is
+`connected`; otherwise an existing quote is `stale`. For a polled source, a
+fresh quote is `live` and an old quote is `stale`; failure of a later poll does
+not discard the prior valid quote.
+
+With no quote, a push row is `stale` while its own feed is connecting or
+connected and is otherwise `offline`. A polled row is `stale` only while its
+own quote request is in progress and is otherwise `offline`. A missing feed
+state behaves as `stopped`. State for any other venue has no effect on the row.
+
+The panel presentation remains the worst current row: offline outranks stale,
+which outranks live. An empty watchlist has no aggregate badge. Detailed
+lifecycles remain internal `FeedLifecycle` values and never create another
+user-facing presentation.
+
 ## 8. Alert engine and durability
 
 ### 8.1 Pure evaluation
+
+> **SUPERSEDED 2026-08-16 (ui26, ui27, and price-source replacement step
+> 2b-2).** Only the final source-acceptance sentence below is superseded. Alert
+> evaluation now receives an accepted current `PriceTick` from either push feed
+> or an accepted current Coinbase primary poll; charts, malformed feed frames,
+> superseded quote requests, and cached stale quotes still never enter it.
+> Retained because it records the exclusion boundary independently of the alert
+> arithmetic.
 
 `AlertEngine.evaluate(alert:price:wallNow:)` consumes the complete alert, an accepted fresh quote price, and current wall-clock `Date`. It returns exactly `noChange`, `rearm`, or `fire`. It performs no I/O.
 
@@ -493,6 +1039,15 @@ A unique identifier combines item UUID and persisted fire timestamp. Submission 
 
 ## 9. Clock discipline and sleep/wake
 
+> **SUPERSEDED 2026-08-16 (ui22, ui23, ui26, ui27, chart reliability repair,
+> and price-source replacement 2b-2).** The fallback-response timer, 24h-only
+> query window, fixed 90-minute gap, singular Binance lease/backoff rows, and
+> claim that charts become stale solely by 30-minute age no longer describe the
+> implementation. Current charts use a selected range, range-derived gaps, and
+> explicit refresh-failure state; both push feeds own separate leases/backoff,
+> and only Coinbase polls. Retained because the choice of wall, continuous, and
+> suspending clocks and the no-replay sleep policy remain normative.
+
 The implementation must inject testable wrappers for the three time domains. Monotonic instants are runtime-only.
 
 | Timed quantity | Duration | Clock/API | Reason and sleep behavior |
@@ -519,6 +1074,31 @@ Observe `NSWorkspace.willSleepNotification` and `didWakeNotification` through `N
 On sleep, cancel search/debounce, all REST work, periodic loops, receive/lease/retry tasks, and close the socket; set Binance lifecycle suspended. On wake, recompute freshness, reconnect immediately for a nonempty Binance set, immediately reconcile Coinbase fallback and charts, and restart periodic loops once. Do not replay any missed interval.
 
 After an eight-hour sleep, old quotes and charts are stale, the old socket cannot survive because it was closed, no missed polls are replayed, and the pre-sleep search debounce cannot issue a request.
+
+### 9.1 Current timing additions and replacements
+
+- Every venue quote uses a 120-second `ContinuousClock` freshness boundary.
+- The common REST layer races transport against a 15-second continuous total
+  deadline in addition to setting `URLRequest.timeoutInterval = 15`.
+- Coinbase polls every 60 awake seconds on `SuspendingClock`; Binance and OKX
+  are never polled for production quotes.
+- Binance and OKX each use their own 1/2/4/8/16/30-second suspending-clock
+  backoff and five-minute suspending-clock lease. Each feed resets only its own
+  counter after a matching lease with at least 60 seconds of delegate-confirmed
+  open time.
+- Candle refresh remains every 15 awake minutes. Query lookback is the selected
+  `ChartRange`: 24 hours, 7 days, or 30 days in wall time.
+- Candle path gaps are strictly greater than 1.5 times the selected range's
+  Coinbase granularity: 1,350, 32,400, or 129,600 seconds.
+- Chart age alone does not dim a series. A failed refresh retains the preceding
+  series with `latestRefreshFailed`; failure before any series is tracked
+  separately so selection can retry it.
+
+Sleep cancels all search, REST, quote-loop, candle-loop, freshness-loop, and
+per-feed receive/lease/retry/subscription work and closes both push sockets.
+Wake resumes both feeds for retained nonempty sets, immediately polls Coinbase
+items, refreshes all charts, recomputes presentation, and recreates periodic
+loops once. No missed interval is replayed.
 
 ## 10. Build and packaging
 
@@ -554,6 +1134,15 @@ The script must not create or invoke `Package.swift`, `swift build`, or a bare e
 
 ## 11. Mechanism accountability ledger
 
+> **SUPERSEDED 2026-08-16 (ui26–ui28, ui22–ui23, and price-source replacement
+> steps one through 2b-2).** The Binance-only lifecycle, fallback eligibility,
+> slow-fallback exclusion, dual venue mapping, 24h-only chart, v0→v1 migration,
+> and singular connection-observability rows below were replaced by the
+> venue-neutral mechanisms in §11.1. The retry-reset row is also superseded
+> where it names exact set/wake transitions. Retained because the ledger records
+> which hidden channels were deliberately forbidden and lets a future reader
+> compare the old fallback architecture with the current fixed-source one.
+
 This table is normative. It identifies every important mechanism’s inputs and the actual API that performs its operation.
 
 | Mechanism | Interface member supplying every input | Concrete operation/API |
@@ -581,7 +1170,33 @@ This table is normative. It identifies every important mechanism’s inputs and 
 
 If implementation work discovers a mechanism whose required input or operation is absent from this table and its owning interface, the implementer must stop and revise the specification rather than invent a hidden channel.
 
+### 11.1 Current venue-neutral mechanism ledger
+
+| Mechanism | Interface member supplying every input | Concrete operation/API |
+|---|---|---|
+| Source dispatch | `PriceSource.venue`, `liveness`, `candidates`, `quote`, `candles`, and `supports` | `configuredPriceSources`; per-venue lookup and iteration in `AppModel` |
+| Feed fan-out | `PriceFeed.venue` plus product-ID sets keyed by venue | `PriceFeedCoordinator.replaceProducts`; lifecycle forwarding without merging |
+| Push-feed identity | Feed-owned configuration UUID, connection UUID, integer task identifier, and task registry | Main-actor `callbackIsCurrent` before every effect; old work canceled only after new identity is installed |
+| OKX subscription | Current sorted OKX product set after matching delegate open | One `WebSocketTaskTransport.send` of batched `tickers` args; connected only after send success |
+| Independent retry and lease | Each feed's own failure counter, open instant, lease/retry tasks, and identities | Per-feed `SuspendingClock.sleep`; 1/2/4/8/16/30 backoff; 300-second rotation |
+| Tick routing | `PriceTick.venue` and `productID`; current single mapping | Exact two-field match before quote or alert application |
+| Primary polled quote | `PriceSource.liveness`, current mapping, request UUID, and remap revision | Per-source suspending loop; current-identity checks before `Quote` publication |
+| Candidate confirmation | Concurrent normalized candidates from every configured `PriceSource` | Stable quote-class ordering; one selected `VenueMapping`; atomic full-state save |
+| Multi-range chart | Current mapping, `PriceSource.supports`, global range, request token, and remap revision | Venue candle method; common filter/deduplicate/sort; range-derived gap drawing |
+| Per-venue presentation | Current mapping venue, quote receipt, `connectionStates`, and per-item source activity | 120-second age comparison and exact source-liveness branch; worst-row aggregate |
+| Schema migration | `VersionProbe`, registered v0/v1/v2 DTOs, and Binance-first v1 collapse | v0→v1→v2 or v1→v2 pure transforms; current validator; atomic schema-2 save |
+| Recovery reset | Protected state file and fixed recovery-backup URL | Atomic backup before atomic schema-2 replacement; unreadable-original exception |
+
 ## 12. Focused acceptance verification
+
+> **SUPERSEDED 2026-08-16 (ui22–ui23, ui26–ui28, and price-source replacement
+> steps one through 2b-2).** The fallback-specific parts of tests 3, 5, 8, 12,
+> and 15–18; schema-v1 expectations in 6; dual confirmation in 8; direct
+> single-feed assumptions in 9–14; 24h/1h-only chart expectations in 17; and
+> fallback source-switch expectations in 22 were replaced by §12.1. Remaining
+> durability, lock, alert, packaging, and no-hidden-channel cases stay current.
+> Retained because the old race tests state the failures the single-market and
+> protocol changes were intended to eliminate rather than silently weakening.
 
 Tests use injected wall/continuous/suspending clocks, mock URL loading, a temporary Application Support root, and controllable socket adapters. Public-network smoke tests are separate from deterministic acceptance tests.
 
@@ -611,7 +1226,50 @@ Tests use injected wall/continuous/suspending clocks, mock URL loading, a tempor
 
 Implementation is accepted when deterministic tests 1–20 and 22–23 pass, strict build passes, and test 21’s programmatic authorization/submission cases pass. Actual notification presentation remains a recorded manual observation because the measured host has no Aqua GUI session.
 
+### 12.1 Current source, feed, persistence, and chart acceptance
+
+Current acceptance additionally requires:
+
+- v0 and v1 fixtures migrate through schema 2 without recovery; a v1 item with
+  both mappings selects Binance, and a single Coinbase mapping remains Coinbase;
+- schema-2 files round-trip one `mapping` field and never emit either legacy
+  named mapping field;
+- the same CoinGecko ID is accepted on distinct markets, while an exact product
+  duplicate on one venue is rejected;
+- combined candidate loading covers Binance, Coinbase, and OKX, permits every
+  quote asset, and preserves the normative quote-class ordering;
+- OKX rejects a nonzero string envelope code, excludes `rebase` instruments,
+  parses newest-first millisecond candles into ascending dates, and uses the
+  exact path/query/bar/count contract in §6.5;
+- Binance tests 09–14 continue to pin lifetime-session ownership, three-way
+  identity, client-wide retry history, message cap, delegate authorization, and
+  combined ticker parsing without weakening their assertions;
+- OKX sends one batched subscription only after open, reconnects with one fresh
+  subscription on product replacement, ignores acknowledgements, backs off on
+  error/send failure, parses millisecond ticker time and computed change, and
+  ignores an unconfigured `instId`;
+- two feeds keep connection, state, lease, and backoff independent, and the
+  coordinator forwards each lifecycle under only its owning venue;
+- Coinbase primary polling computes unavailable change for nonpositive or
+  malformed open and rejects a response after remap;
+- all three ranges match the table in §6.3.1, normalize timestamps at every
+  granularity, split only at range-derived gaps, refresh every row after a global
+  range change, retry a first failure, and do not discard an in-flight chart
+  when a price tick arrives;
+- `Venue.displayName` yields exactly `Binance`, `Coinbase`, and `OKX`, source
+  liveness yields push/60-second-poll/push, and a state change for one venue
+  cannot stale another venue's row.
+
 ## 13. Deliberate omissions and accepted limits
+
+> **SUPERSEDED 2026-08-16 (ui26, ui27, ui22–ui23, and price-source replacement
+> 2b-2).** The fallback, immediate Binance failback, 24h-only candle, and blanket
+> “no dynamic subscribe/ack protocol” omissions below no longer describe the
+> app. There is no runtime fallback; charts have three ranges; and OKX must send
+> a subscription after open even though Binance still names streams in its URL.
+> Retained because these limits document why substitution was removed and why
+> the two feed implementations deliberately have different subscription
+> contracts.
 
 - **No buffered feed stream or consumer epoch.** Previous designs could not atomically hand off authorization or purge `AsyncStream` buffers. Main-actor identity checking removes both mechanisms.
 - **No health-reconnect command.** A delayed external repair request needs a connection identity and can tear down a healthy successor. The owning controller’s lease and retry paths perform all replacement internally.
@@ -630,9 +1288,30 @@ Implementation is accepted when deterministic tests 1–20 and 22–23 pass, str
 - **Backward wall-clock changes can extend cooldown.** Negative age is clamped, preventing early fire but not delayed re-eligibility.
 - **Ad-hoc signing is local-only.** Distribution and notarization are outside this version.
 
+### 13.1 Current accepted source/feed limits
+
+- **One selected market can fail without substitution.** A dead selected feed
+  leaves that row stale or offline and alerts cannot fire until that same source
+  supplies an accepted quote.
+- **Coinbase polling can miss brief breaches.** The 60-second cadence and warning
+  derive from `SourceLiveness`; Binance and OKX are push feeds and show no polling
+  warning.
+- **OKX product replacement reconnects.** It sends a fresh full subscription on
+  a replacement socket rather than unsubscribe/subscribe on the live socket.
+- **Lifecycle implementations are duplicated.** Binance and OKX cannot disturb
+  each other's identity, lease, or backoff through shared mutable machinery, at
+  the accepted cost that their lifecycle code can drift.
+- **Every chart is a per-item REST request.** All three venues normalize their
+  own candle wire format; no aggregator or batch endpoint supplies the selected
+  24h, 7d, and 30d contracts.
+
 ## 14. Protocol references
 
 - Binance Spot WebSocket streams: `https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md`
 - Binance Spot REST klines: `https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md`
 - Coinbase Exchange product candles: `https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-product-candles`
+- OKX public WebSocket endpoint: `wss://ws.okx.com:8443/ws/v5/public`
+- OKX public instruments endpoint: `https://www.okx.com/api/v5/public/instruments?instType=SPOT`
+- OKX ticker endpoint: `https://www.okx.com/api/v5/market/ticker`
+- OKX historical candles endpoint: `https://www.okx.com/api/v5/market/history-candles`
 - Apple `URLSessionWebSocketTask`: `https://developer.apple.com/documentation/foundation/urlsessionwebsockettask`
