@@ -506,9 +506,19 @@ branch fails four by dropping real v1 files into recovery. Changing Coinbase's
 poll interval from 60 to 30 fails 22g. The source was restored exactly after
 each.
 
-*Still not covered:* an alert surviving a quit-and-relaunch has never been
-exercised, which is a gap that predates this change rather than one it
-introduced.
+*An alert surviving a quit-and-relaunch was then exercised too*, closing a gap
+that predated this change. An alert was set on BTC (above 70,123, cooldown 60,
+hysteresis 10), the app was quit and reopened, and the editor came back with
+every field intact. The on-disk v2 record matches what the editor shows, which
+also exercises something fixtures could not: writing an alert through the new
+single-mapping DTO rather than only reading an old one. The same screen
+confirmed the disclosure fix — a Binance market no longer shows the Coinbase
+polling sentence.
+
+Noted so it is not later mistaken for a defect: that alert was saved with
+`isEnabled: false`, because the editor's Enabled toggle was off. The alert
+persists and will not fire until the toggle is turned on, which is the intended
+behaviour rather than a lost setting.
 
 ### Chart time range
 The chart is fixed to 24 hours. Evaluated 2026-08-15; decisions below.
