@@ -228,6 +228,64 @@ Near-miss tickers are not made harder to spot — `BTC/USD1` separates itself fr
 `BTC/USD` more clearly than `BTCUSD1` did, because the slash marks where the
 quote asset begins.
 
+### Charts sometimes did not draw — FIXED 2026-08-16
+Reported from the desktop after 2b-2: charts failed to appear at all three
+ranges, intermittently, and worse right after a relaunch. **Three separate
+defects, found one at a time**, each hidden behind the one in front of it. All
+three predate the OKX work; adding a second push feed made the last one much
+easier to hit.
+
+**1. A range change only refreshed the row whose picker was used.** The range is
+one global setting, but charts are stored per item, so every other row kept a
+series at the old range. `refreshChartIfNeeded` exists to repair that, but it ran
+from `onAppear`, which does not fire again for a row already on screen. Symptom:
+a chart at the wrong range, or blank. Fixed by refreshing every chart when the
+range changes. *Caught by:* the picker read `30d` while the caption read
+`7d chart` — the ranges disagreed, which no network failure can cause.
+
+**2. A first fetch that failed was never retried and never reported.**
+`latestRefreshFailed` can only mark a series that already exists, so a failure
+with nothing drawn set no flag and left `charts[itemID]` nil. Nothing asked
+again except the 15-minute candle loop. Fixed by retrying on selection change
+and by tracking `chartFailures` separately.
+
+That fix also split the wording, which is what found the third defect: **"chart
+unavailable" describes the market, "chart could not be loaded" describes this
+attempt.** They had read the same, and that made a silent-discard bug
+indistinguishable from a network failure.
+
+**3. Price ticks threw away the chart being fetched for them.** This was the
+real cause of the randomness. `feedDidAccept` did two things that sabotage an
+in-flight chart request, and a push feed does both constantly:
+
+- It incremented `marketRevisions` on every tick. That counter means *this row
+  now points at a different market*, which is what genuinely makes an in-flight
+  chart stale — `reconcileRuntimeAfterEdit` still bumps it for exactly that. A
+  new price on the same market is not a remap, so bumping it here discarded any
+  chart request slower than the next tick.
+- The first tick for a row without a chart called `refreshChart` directly,
+  cancelling the request already in flight from startup and beginning again. On
+  a busy market that could repeat, so the chart was perpetually reissued rather
+  than finished. It now goes through `refreshChartIfNeeded`, which leaves an
+  in-flight request alone.
+
+Neither path recorded a failure, because nothing failed. That is why the row
+said "unavailable" rather than "could not be loaded", why relaunching made it
+worse (every row requests at once, exactly when the feed starts pushing), and
+why the busiest markets were the worst affected.
+
+**What made this findable.** Each fix sharpened the next symptom rather than
+merely reducing the frequency. The range mismatch ruled out the network; the new
+failure wording ruled out the fetch; what remained could only be the result
+being discarded. Guessing at the whole thing from the first screenshot would not
+have got there — two of my early hypotheses were written as tests and *passed*,
+which is what ruled them out. Tests 17g, 17h, 17i and 17j pin the three defects
+and the retry path; each was verified by mutation, and 17j fails if either half
+of the third fix is reverted.
+
+Verified on the desktop 2026-08-16: charts draw at all three ranges, including
+straight after a relaunch with several rows selected in turn.
+
 ### A dropped feed has never been seen
 Deferred 2026-08-16 as not worth chasing. The offline row treatment from ui26
 and ui27 — the dimmed row, the change losing its up/down colour, the Alert
