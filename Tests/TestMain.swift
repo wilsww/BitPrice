@@ -2254,25 +2254,28 @@ struct BitPriceTests {
                     "the watch row's column widths no longer read as their written point values at Medium"
                 )
             },
-            AcceptanceTest(name: "22m header icon buttons reserve one shared width") {
-                // gearshape draws wider than plus, so the two header buttons only
-                // match if both reserve the same width. Measured at the point size
-                // .title resolves to, which is what the buttons actually use.
+            AcceptanceTest(name: "22m header icon buttons reserve one shared square") {
+                // plus and gearshape differ on both axes -- 23x23 against 27x28 at
+                // Medium. An earlier version of this test checked width only, and
+                // passed while the shipped buttons were visibly different heights:
+                // constraining the width alone left them 43x23 and 43x28. Both
+                // extents are checked here for that reason.
                 let pointSize = PanelFont.pointSize(for: .title, preference: .medium)
-                let widths = ["plus", "gearshape"].map { name -> CGFloat in
+                let sizes = ["plus", "gearshape"].map { name -> CGSize in
                     let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
                     return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-                        .withSymbolConfiguration(configuration)?.size.width ?? 0
+                        .withSymbolConfiguration(configuration)?.size ?? .zero
                 }
                 try expect(
-                    widths.allSatisfy { $0 > 0 },
+                    sizes.allSatisfy { $0.width > 0 && $0.height > 0 },
                     "a header button's symbol no longer resolves, so the button would render empty"
                 )
-                for width in widths {
+                for size in sizes {
                     try expect(
-                        width <= PanelLayout.headerIconWidth,
-                        "the add and settings buttons render at different widths, so the two sit side by side "
-                            + "with visibly different backgrounds"
+                        size.width <= PanelLayout.headerIconExtent
+                            && size.height <= PanelLayout.headerIconExtent,
+                        "the add and settings buttons render at different sizes, so the two sit side by side "
+                            + "with one visibly larger than the other"
                     )
                 }
             },

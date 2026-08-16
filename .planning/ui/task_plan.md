@@ -346,15 +346,37 @@ a ring. The four candidates at Small and Extra Large:
 only 2–5 points. `.largeTitle` adds 11 points at Extra Large, which makes the
 button noticeably fatter rather than the icon noticeably clearer.
 
-**What the measurement caught that the eye would not have.** `gearshape` draws
-wider than `plus` — 27 points against 23 at Medium — so the two buttons would
-have ended up different widths sitting directly next to each other. The `.circle`
-variants had hidden this: the enclosing ring set the size for both, so they were
-identical at 20×19 despite the glyphs inside differing. Both now reserve
-`PanelLayout.headerIconWidth`, the wider of the two, scaled by the same factor as
-the rest of the panel. Test `22m` measures both symbols at the point size
-`.title` actually resolves to and fails if either exceeds the reserved width;
-verified by mutation, setting the shared width to `plus`'s 23 fails it.
+**The two buttons then shipped at different sizes anyway, and the test passed.**
+This is the part worth keeping.
+
+`gearshape` is wider than `plus` — 27 points against 23 at Medium — so both
+symbols were given a shared **width**. That was measured, it was correct as far
+as it went, and it was not enough: the two symbols differ on *both* axes, 23×23
+against 27×28, and the ring in the `.circle` variants had been hiding the height
+difference just as it hid the width. The shipped buttons came out 43×23 and
+43×28, and the taller gear read as the bigger control — which is exactly what the
+next desktop screenshot showed.
+
+Test `22m` passed throughout. It asserted that 27 was at least as wide as both
+symbols, which was true and had nothing to do with what the buttons rendered as.
+It checked a number, not the thing the number was supposed to control. A
+mutation check had "confirmed" it, because shrinking the constant does fail the
+assertion — a mutation check only proves a test reacts to the value it reads, not
+that the value governs the defect.
+
+Resolved by measuring the rendered buttons rather than the symbols, in a
+throwaway `NSHostingView` harness that printed each button's actual frame under
+four candidate constructions:
+
+| construction | plus | gearshape | equal |
+|---|---|---|---|
+| no frame | 39×23 | 43×28 | no |
+| width on the `Image` (shipped) | 43×23 | 43×28 | no |
+| width on the `Button` | 27×23 | 27×28 | no |
+| **square frame on the `Image`** | **43×29** | **43×29** | **yes** |
+
+Both symbols now take a square `PanelLayout.headerIconExtent`, and `22m` checks
+both extents rather than the width alone.
 
 ### The watch row was clipped at Small — FIXED 2026-08-16
 Reported from the desktop while verifying ui29. At Small the list's change column

@@ -113,20 +113,20 @@ enum PanelLayout {
         requiredRowWidth(for: preference) <= availableRowWidth(for: preference)
     }
 
-    /// Width reserved for each of the header's two icon buttons, at Medium.
+    /// Square extent reserved for each of the header's two icon symbols, at Medium.
     ///
-    /// The two symbols do not draw at the same width. `gearshape` is 27 points
-    /// wide at Medium against `plus`'s 23, so without a shared width their two
-    /// button backgrounds would differ visibly — they sit next to each other, so
-    /// a 4-point difference reads as a mistake. The bordered `.circle` variants
-    /// these replaced happened to be identical because the enclosing circle set
-    /// the size for both, which is why the difference only appears now.
+    /// `plus` and `gearshape` differ on **both** axes — 23×23 against 27×28 at
+    /// Medium — and the bordered `.circle` variants these replaced hid that,
+    /// because the enclosing ring sized both identically. Constraining only the
+    /// width was tried first and was not enough: the two buttons came out 43
+    /// points wide but 23 and 28 tall, and the taller gear button read as the
+    /// bigger control. A square frame on both symbols settles both axes at once.
     ///
-    /// Set to the wider of the two, measured rather than guessed.
-    static let headerIconWidth: CGFloat = 27
+    /// Measured, not derived: with this applied, both buttons render 43×29.
+    static let headerIconExtent: CGFloat = 27
 
-    static func headerIconWidth(for preference: TextSizePreference) -> CGFloat {
-        headerIconWidth * columnScale(for: preference)
+    static func headerIconExtent(for preference: TextSizePreference) -> CGFloat {
+        headerIconExtent * columnScale(for: preference)
     }
 }
 
@@ -613,14 +613,20 @@ struct ContentView: View {
                 // backgrounds identical — see `PanelLayout.headerIconWidth`.
                 Button { route = .add } label: {
                     Image(systemName: "plus")
-                        .frame(width: PanelLayout.headerIconWidth(for: model.persistedState.textSize))
+                        .frame(
+                            width: PanelLayout.headerIconExtent(for: model.persistedState.textSize),
+                            height: PanelLayout.headerIconExtent(for: model.persistedState.textSize)
+                        )
                 }
                 .panelFont(.title)
                 .disabled(model.isReadOnly || model.items.count >= maximumWatchlistCount)
                 .help("Add a coin")
                 Button { route = .settings } label: {
                     Image(systemName: "gearshape")
-                        .frame(width: PanelLayout.headerIconWidth(for: model.persistedState.textSize))
+                        .frame(
+                            width: PanelLayout.headerIconExtent(for: model.persistedState.textSize),
+                            height: PanelLayout.headerIconExtent(for: model.persistedState.textSize)
+                        )
                 }
                 .panelFont(.title)
                 .help("Settings")
