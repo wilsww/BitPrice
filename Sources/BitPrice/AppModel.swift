@@ -404,7 +404,11 @@ final class AppModel: ObservableObject, PriceFeedSink {
         guard let item = persistedState.items.first(where: {
             $0.mapping?.exchange == tick.venue && $0.mapping?.productID == tick.productID
         }), let mapping = item.mapping else { return }
-        marketRevisions[item.id, default: 0] &+= 1
+        // Deliberately does NOT bump marketRevisions. That counter means "this
+        // row now points at a different market", which is what makes an in-flight
+        // chart request stale. A new price on the same market is not that, and
+        // bumping it here discarded any chart request slower than the next tick --
+        // on a push feed, most of them.
         let quote = Quote(
             itemID: item.id,
             price: tick.price,
@@ -416,7 +420,12 @@ final class AppModel: ObservableObject, PriceFeedSink {
         let hadQuote = quotes[item.id] != nil
         quotes[item.id] = quote
         evaluateAlert(item: item, quote: quote)
-        if !hadQuote { refreshChart(itemID: item.id) }
+        // The first tick draws the chart for a row that has none. Going through
+        // refreshChart directly would cancel the request already in flight from
+        // startup and start it over, and on a busy market the next first-tick
+        // could do it again -- so the chart was repeatedly restarted rather than
+        // finished. refreshChartIfNeeded leaves an in-flight request alone.
+        if !hadQuote { refreshChartIfNeeded(for: item.id) }
     }
 
     func feedStateDidChange(_ state: FeedLifecycle, venue: Venue) {

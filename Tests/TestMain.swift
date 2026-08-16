@@ -1209,6 +1209,119 @@ struct BitPriceTests {
                 try expect(model.charts[id] == nil, "superseded chart published after remap")
                 model.shutdown()
             },
+            AcceptanceTest(name: "17j a price tick arriving mid-request does not discard the chart") {
+                // marketRevisions exists to reject a chart fetched for a market the
+                // user has since remapped. But feedDidAccept bumped the same counter
+                // on every incoming tick, and a push feed delivers those constantly,
+                // so any chart request slower than the next tick was thrown away --
+                // leaving the row on "chart unavailable" with no failure recorded,
+                // because nothing failed. Whether a row drew came down to whether a
+                // tick happened to land during its request, which is why it looked
+                // random and why the busiest markets were the worst affected.
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
+                let lock = try ProcessLock(rootDirectory: root)
+                let delayed = DelayedHTTPTransport()
+                let parts = controllerParts()
+                let model = AppModel(
+                    persistenceStore: store, processLock: lock, restClients: clients(transport: delayed),
+                    priceFeeds: [parts.controller], notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
+                    continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false, observeSleepWake: false
+                )
+                let id = UUID()
+                try model.addItem(WatchItem(
+                    id: id, coinGeckoID: "bitcoin", symbol: "BTC", name: "Bitcoin",
+                    mapping: VenueMapping(exchange: .binance, productID: "BTCUSDT", baseAsset: "BTC",
+                                          quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    alert: nil
+                ))
+                for _ in 0..<100 {
+                    if await delayed.pendingCount() > 0 { break }
+                    await Task.yield()
+                }
+
+                // A tick lands while the chart request is still in flight. This is
+                // the ordinary case on a push feed, not an edge case.
+                model.feedDidAccept(PriceTick(
+                    venue: .binance, productID: "BTCUSDT", price: 63000, changePercent: 1,
+                    eventDate: Date(timeIntervalSince1970: 100_000),
+                    receivedInstant: FixedContinuousClock().now()
+                ))
+
+                let candles = Data(#"[[100000000,"1","1","1","63000",""]]"#.utf8)
+                await delayed.completeFirst(response(body: candles))
+                for _ in 0..<200 { await Task.yield() }
+                try expect(
+                    model.charts[id]?.points.isEmpty == false,
+                    "a price update arriving while the chart loads throws the chart away, so an actively trading market shows no chart at all"
+                )
+                model.shutdown()
+            },
+            AcceptanceTest(name: "17i a superseded chart request does not block every later retry") {
+                // chartTasks[itemID] was cleared only on the task's last line, which
+                // every early return skips -- including a cancelled one. A request
+                // superseded before it finished therefore left a non-nil entry
+                // behind forever, and refreshChartIfNeeded guards on that entry
+                // being nil, so the row could never be retried again. Two rows
+                // refreshing at once at startup is enough to hit it, which is why
+                // it looked random: whichever request lost the race stayed blank.
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
+                let lock = try ProcessLock(rootDirectory: root)
+                let delayed = DelayedHTTPTransport()
+                let parts = controllerParts()
+                let model = AppModel(
+                    persistenceStore: store, processLock: lock, restClients: clients(transport: delayed),
+                    priceFeeds: [parts.controller], notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
+                    continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false, observeSleepWake: false
+                )
+                let id = UUID()
+                try model.addItem(WatchItem(
+                    id: id, coinGeckoID: "bitcoin", symbol: "BTC", name: "Bitcoin",
+                    mapping: VenueMapping(exchange: .binance, productID: "BTCUSDT", baseAsset: "BTC",
+                                          quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    alert: nil
+                ))
+                for _ in 0..<100 {
+                    if await delayed.pendingCount() > 0 { break }
+                    await Task.yield()
+                }
+
+                // Supersede the in-flight request the way a range change does,
+                // then put the range back so the row is asking for what it began
+                // with. The first task is now cancelled and will take an early
+                // return without ever clearing its chartTasks entry.
+                try model.setChartRange(.days7, for: id)
+                try model.setChartRange(.hours24, for: id)
+                for _ in 0..<200 { await Task.yield() }
+
+                // Fail everything outstanding, so nothing succeeds by luck.
+                for _ in 0..<20 {
+                    guard await delayed.pendingCount() > 0 else { break }
+                    await delayed.completeFirst(response(status: 500, body: Data()))
+                    for _ in 0..<20 { await Task.yield() }
+                }
+                try expect(model.charts[id] == nil, "a chart was drawn when every request had failed")
+
+                // The user selects the row again. This must issue a request.
+                let before = await delayed.requests.count
+                model.refreshChartIfNeeded(for: id)
+                for _ in 0..<200 { await Task.yield() }
+                let after = await delayed.requests.count
+                try expect(
+                    after > before,
+                    "selecting the row asks for nothing, so it stays on \"chart unavailable\" for the rest of the session no matter how often it is selected"
+                )
+                model.shutdown()
+            },
             AcceptanceTest(name: "17h a chart that fails its first fetch is retried, not abandoned") {
                 // The failure branch marked latestRefreshFailed on an existing
                 // series, which does nothing when there is no series yet: the row
