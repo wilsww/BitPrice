@@ -1487,6 +1487,57 @@ struct BitPriceTests {
                            "the no-market message no longer names the configured sources")
                 model.shutdown()
             },
+            AcceptanceTest(name: "22j a tick is routed by venue, not by product ID alone") {
+                // Two venues can list the same product ID -- validatePersistedState
+                // only rejects a duplicate market on the *same* venue. Binance and
+                // OKX happen to spell BTC differently today, so product ID alone
+                // would work by coincidence; it would stop working the moment a
+                // second feed carried a spelling the first one also uses, and the
+                // wrong row would take the price.
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let model = AppModel(
+                    persistenceStore: try PersistenceStore(rootDirectory: root),
+                    processLock: try ProcessLock(rootDirectory: root),
+                    restClients: clients(transport: StubHTTPTransport([])),
+                    feedController: controllerParts().controller,
+                    notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
+                    continuousClock: FixedContinuousClock(),
+                    suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false,
+                    observeSleepWake: false
+                )
+                let binanceItem = model.items[0]
+                let okxID = UUID()
+                try model.addItem(WatchItem(
+                    id: okxID,
+                    coinGeckoID: "bitcoin-okx-duplicate",
+                    symbol: "BTC",
+                    name: "Bitcoin",
+                    mapping: VenueMapping(
+                        exchange: .okx,
+                        productID: "BTCUSDT",
+                        baseAsset: "BTC",
+                        quoteAsset: "USDT",
+                        provenance: .userConfirmedTickerMatch
+                    ),
+                    alert: nil
+                ))
+                model.feedDidAccept(PriceTick(
+                    venue: .okx,
+                    productID: "BTCUSDT",
+                    price: 100,
+                    changePercent: 1,
+                    eventDate: Date(timeIntervalSince1970: 2_000),
+                    receivedInstant: FixedContinuousClock().now()
+                ))
+                try expect(
+                    model.quotes[okxID]?.price == 100 && model.quotes[binanceItem.id] == nil,
+                    "a price from one venue landed on a row that tracks a different venue, so that row shows a price it never subscribed to"
+                )
+                model.shutdown()
+            },
             AcceptanceTest(name: "22i one venue feed state cannot stale another venue's row") {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
