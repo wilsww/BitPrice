@@ -393,8 +393,9 @@ Binance or Coinbase can satisfy, since both have delisted it; KuCoin and Kraken
 both carry it, and of those two only KuCoin passes the 6h candle gate.
 
 ### Make the price source a replaceable part
-Raised 2026-08-16, out of the price-source survey above. **Three steps — one,
-2a, 2b — and they must not be combined**; see "Why they must be separate" below.
+Raised 2026-08-16, out of the price-source survey above. **Four steps — one, 2a,
+2b-1, 2b-2 — and they must not be combined**; see "Why they must be separate"
+below. Step one and 2a are done and verified on the desktop; 2b is outstanding.
 
 **Step one is done and was verified on the desktop 2026-08-16**; see the closing
 section of this entry. **Step two — adding OKX — is outstanding and is the
@@ -532,7 +533,7 @@ So volume ordering is a separate piece of work with its own cost, not part of
 adding a venue. Recorded as its own entry below. 2a does not touch
 `VenueCandidateOrdering`.
 
-#### Step 2b — the feed seam. Outstanding. One to two days, and the real risk.
+#### Step 2b — the feed seam. Outstanding, and it splits into 2b-1 and 2b-2.
 
 **2a gave this a user-facing reason it did not have before.** Until OKX shipped,
 the only polled venue was Coinbase and the case for sharing the feed layer was
@@ -540,14 +541,91 @@ structural. Now a large venue that *has* a push feed is being polled because
 this code cannot use it, and the first question after the desktop test was why
 OKX updates only every 30 seconds. That is the answer 2b removes.
 
-`BinanceFeedController` is the one thing step one deliberately did not
-abstract, and it is not a thin wrapper. Its 290 lines carry the app's only real
-concurrency-correctness machinery: three-way identity checking across
-`configurationID`, `connectionID` and `taskIdentifier` (`callbackIsCurrent`),
-lease timeouts, failure backoff, sleep/wake. `AppModel` holds it by concrete
-type, not by protocol, and `feedDidAccept` filters on
-`mapping?.exchange == .binance`, so an OKX tick reaching that method today would
-be dropped.
+**Assessed 2026-08-16, and the assessment corrected the plan.** The paragraphs
+below this one described 2b as extracting a `PriceFeed` protocol and a
+controller owning several feeds. That is part of it, but reading the code found
+the harder problem is not in the connection layer at all — it is the shape of
+the state `AppModel` keeps about feeds, and it would have been discovered
+halfway through the connection rewrite rather than before it.
+
+**`connectionState` is singular, and with two push feeds it lies.**
+
+```swift
+@Published private(set) var connectionState: FeedLifecycle = .stopped
+
+func feedStateDidChange(_ state: FeedLifecycle) {
+    connectionState = state          // no venue parameter
+}
+```
+
+`rowPresentation` reads it to decide whether each row shows live, stale or
+offline:
+
+```swift
+case .push:
+    return fresh && connectionState == .connected ? .live : .stale
+```
+
+With one push feed that is correct. With two, an OKX disconnect marks the
+Binance rows stale and the reverse — a row would claim its price is suspect
+because a venue it does not use went down. This is not a bug in the feed
+controller; it is `AppModel` holding a single value for something that is about
+to have one per venue.
+
+The same assumption runs through `PriceFeedSink`, whose two methods carry no
+venue and whose `PriceTick` has no venue field:
+
+```swift
+protocol PriceFeedSink: AnyObject {
+    func feedDidAccept(_ tick: PriceTick)
+    func feedStateDidChange(_ state: FeedLifecycle)
+}
+```
+
+That is why `feedDidAccept` filters on `mapping?.exchange == .binance` — it has
+no way to know which venue a tick came from. Two push feeds could still be told
+apart by product ID today, because Binance writes `BTCUSDT` and OKX writes
+`BTC-USDT`, but that is a coincidence of formatting rather than a design, and it
+is not a distinction worth resting price routing on.
+
+**So 2b splits, for the third time and for the same reason.**
+
+**2b-1 — make feed state per-venue. Half a day, no behaviour change.** Add
+`venue` to `PriceTick`, add it to both `PriceFeedSink` methods, and turn
+`connectionState` into `[Venue: FeedLifecycle]` with `rowPresentation` looking
+up the venue that row actually uses. With one push feed configured, a dictionary
+holding a single `.binance` key produces exactly the results the scalar produces
+today — which is what makes the existing tests a usable regression net, the same
+position step one was in.
+
+**2b-2 — extract the protocol and add the OKX feed. One day.** A `PriceFeed`
+protocol and a coordinator owning several feeds, plus an `OKXFeed` that connects
+first and then sends `{"op":"subscribe",…}`. By then the multi-feed state model
+is already correct and verified, so a failure here means the connection layer.
+
+Keeping them apart matters more here than it did for 2a. Step 3 touches the
+three-way identity checking (`configurationID`, `connectionID`,
+`taskIdentifier`), the lease rotation and the backoff ladder — the hardest code
+in the app to debug. A pure state-shape change should not share a diff with it.
+
+**One approach considered and rejected.** The coordinator could merge several
+feeds' states into a single `FeedLifecycle` and keep `connectionState` scalar,
+which would be the smallest change. It should not: there is no correct merge
+rule when one feed is connected and another is backing off, and any rule chosen
+turns "which row is stale" from a precise question into an approximation. 2b-1
+costs half a day and removes a permanent source of wrong answers.
+
+**Nine tests move with this work** — 09 through 14 name `BinanceFeedController`
+concretely, and 10, 11 and 13 exist specifically to pin the identity checking.
+They are the reason the rewrite is tractable at all, and they should be rebound
+to the protocol rather than rewritten, so that what they assert stays the same.
+
+**What 2b-2 is actually rewriting.** `BinanceFeedController` is the one thing
+step one deliberately did not abstract, and it is not a thin wrapper. Its 290
+lines carry the app's only real concurrency-correctness machinery: three-way
+identity checking across `configurationID`, `connectionID` and `taskIdentifier`
+(`callbackIsCurrent`), lease timeouts, failure backoff, sleep/wake. `AppModel`
+holds it by concrete type, not by protocol.
 
 The lifecycle machinery is genuinely venue-neutral and worth sharing. What is
 not shareable is subscription and parsing: Binance names its streams in the URL,
@@ -555,12 +633,7 @@ which is why `maximumCombinedStreamURLBytes` exists at all, while OKX connects
 first and then sends `{"op":"subscribe",…}`, returning `{"arg":…,"data":[…]}`.
 `replaceProducts` therefore means "reconnect to a new URL" on one venue and
 "send an unsubscribe and a subscribe" on the other. The same method name cannot
-carry both implementations.
-
-Doing this properly means extracting a `PriceFeed` protocol and a controller
-that owns several feeds, leaving each venue's identity checking inside its own
-implementation. That is a rewrite of the connection layer. The existing feed
-tests all name `BinanceFeedController` concretely and will move with it.
+carry both implementations, which is the seam the protocol has to fall on.
 
 If 2b is never done, OKX stays on a 30-second poll and says so in the UI. That
 is a real product state, not a broken one.
@@ -635,9 +708,16 @@ an estimate will. What the three venues actually do today:
 **Why they must be separate.** Each split isolates one class of failure.
 Combined, step one and step two leave a failing test unable to distinguish a
 restructuring mistake from a mis-wired new venue. Combined, 2a and 2b leave it
-unable to distinguish a bad OKX mapping from a broken connection layer — and 2b
-touches the only code in the app with real concurrency-correctness machinery, so
-that is exactly the distinction worth keeping.
+unable to distinguish a bad OKX mapping from a broken connection layer.
+Combined, 2b-1 and 2b-2 leave it unable to distinguish a wrong feed-state shape
+from a wrong connection rewrite — and 2b-2 touches the only code in the app with
+real concurrency-correctness machinery, so that is the distinction most worth
+keeping of the three.
+
+The pattern each time: the step that changes structure without changing
+behaviour goes first, so the existing tests are a usable regression net for it,
+and the step that changes behaviour goes second against a baseline that is
+already known good.
 
 **The risk that needs stating.** Step one collapsed two mapping fields into one,
 which is a schema change, and schema changes on this app land in the recovery
