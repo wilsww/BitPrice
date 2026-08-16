@@ -489,8 +489,14 @@ can be done.
 #### Step 2a — OKX as a polling source. Half a day, additive.
 
 Everything except the push feed. OKX has a full REST ticker, so it can ship as
-`.polled(seconds: 60)` — the same liveness Coinbase runs on today — and be a
-usable venue: visible in the picker, quoted, charted, alertable.
+a polled source — the way Coinbase runs today — and still be a usable venue:
+visible in the picker, quoted, charted, alertable.
+
+**Poll interval: 30 seconds, decided 2026-08-16.** Coinbase polls at 60. OKX's
+public REST limit is 20 requests per 2 seconds per endpoint, which 30-second
+polling does not come close to, and the shorter interval halves the window in
+which an alert threshold can be crossed unseen. `liveness` already carries the
+number, so the UI will say "polls every 30 seconds" without being told.
 
 - **`OKXPriceSource`.** A new conformance next to `CoinbasePriceSource`, which
   is the working template. Three new methods on `RESTClients` (candidates,
@@ -506,13 +512,25 @@ usable venue: visible in the picker, quoted, charted, alertable.
   both pick up a third venue on their own. Test 22g pins that seam and should be
   extended rather than replaced.
 
-**`VenueCandidateOrdering` is a product decision, not a mechanical one.** Its
-final tie-break is `venue.rawValue` alphabetically, so today `binance` sorts
-before `coinbase`. That ordering has always been an accident of spelling rather
-than a ranking. Adding a third venue makes the accident visible: `okx` sorts
-last, on every ticker, forever. Whether venues should carry an explicit
-preference order is a question about which exchange a user should be offered
-first — it needs an answer before 2a ships, and the answer is not the compiler's.
+**`VenueCandidateOrdering` stays alphabetical — decided 2026-08-16.** Its final
+tie-break is `venue.rawValue`, so `binance` sorts before `coinbase` today and
+`okx` will sort last. That is an accident of spelling rather than a ranking, and
+adding a third venue makes the accident visible.
+
+The alternative considered was ranking by traded volume, which raised the
+question of whether the picker should then *show* the volume it sorts by. It
+should — sorting by a number the user cannot see is worse than not sorting.
+**But the catalogue responses do not carry volume**, and this was checked rather
+than assumed: Binance `/api/v3/exchangeInfo` and Coinbase `/products` both
+return instrument definitions only (symbol, status, base/quote, precision,
+filters), as does OKX `/api/v5/public/instruments`. Volume lives on the ticker
+endpoints, which are a different request per candidate — three extra calls for a
+ticker listed on all three venues, all of them in front of a user waiting to add
+a coin, all queued behind `RequestPacer`.
+
+So volume ordering is a separate piece of work with its own cost, not part of
+adding a venue. Recorded as its own entry below. 2a does not touch
+`VenueCandidateOrdering`.
 
 #### Step 2b — the feed seam. One to two days, and the real risk.
 
@@ -613,6 +631,37 @@ Noted so it is not later mistaken for a defect: that alert was saved with
 `isEnabled: false`, because the editor's Enabled toggle was off. The alert
 persists and will not fire until the toggle is turned on, which is the intended
 behaviour rather than a lost setting.
+
+### Order the candidate markets by traded volume, and show it
+Raised 2026-08-16 while scoping OKX; deliberately kept out of that work.
+
+When a ticker is listed on more than one venue, the add-coin picker orders the
+candidates by quote asset first (USD/USDT, then USDC, then FDUSD) and breaks
+remaining ties on the venue's name, alphabetically. That tie-break is spelling,
+not judgement. With two venues it happens to agree with liquidity; with three it
+stops agreeing, and it will never be the reason a user should prefer one market.
+
+Volume is the honest ordering, and if the list is sorted by volume it should
+display volume — a list ordered by an invisible number is harder to trust than
+an arbitrary one. Same-ticker comparison across venues is sound, since each
+venue reports 24h volume in the base asset and the base asset is the same one
+the user searched for. Cross-ticker comparison would need USD conversion; this
+feature does not.
+
+**The cost is request count, and it lands where it is most visible.** The
+catalogue endpoints do not carry volume — checked, not assumed: Binance
+`/api/v3/exchangeInfo`, Coinbase `/products` and OKX
+`/api/v5/public/instruments` all return instrument definitions only. Volume
+comes from the ticker endpoints, one request per candidate, so a ticker listed
+on three venues costs three extra calls with the user waiting on the add-coin
+screen and every call queued behind `RequestPacer`.
+
+Two ways to avoid paying that per candidate, both worth weighing before
+implementing: Binance's `/ticker/24hr` and OKX's `/market/tickers` each return
+the *whole* venue in one response, so a single request per venue would serve
+every candidate at once — but those are large payloads to fetch for one row.
+Coinbase has no such bulk endpoint on the exchange API and would still be
+per-product.
 
 ### Chart time range
 The chart is fixed to 24 hours. Evaluated 2026-08-15; decisions below.
