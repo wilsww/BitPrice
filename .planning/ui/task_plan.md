@@ -373,7 +373,10 @@ both carry it, and of those two only KuCoin passes the 6h candle gate.
 
 ### Make the price source a replaceable part
 Raised 2026-08-16, out of the price-source survey above. **Two steps, and they
-must not be combined** — see the last paragraph for why.
+must not be combined** — see the last paragraph for why. **Step one is done and
+was verified on the desktop 2026-08-16**; see the closing section of this entry.
+Step two remains unstarted, and the survey above concluded there is currently no
+venue worth adding.
 
 The survey concluded that no third venue earns its keep on coverage. A separate
 question came out of estimating the work: adding *any* venue is more expensive
@@ -459,6 +462,53 @@ Binance names its stream in the URL and wraps messages in `stream`/`data`, while
 OKX subscribes with a message after connecting. Generalising means extracting
 the protocol-specific part and keeping the lifecycle shared, which is real work
 rather than a rename.
+
+---
+
+**Step one landed 2026-08-16** in "refactor: put the two venues behind a
+PriceSource protocol", delegated and then verified rather than taken on report.
+The test count went from 50 to 51.
+
+*The migration was verified against a real file, not only fixtures.* This is the
+part that mattered, because a migration bug does not crash — it drops the user's
+watchlist into read-only recovery. The live `watchlist.json` was a v1 file with
+four Binance-mapped items (BTC, ETH, SOL, ONDO), which is exactly the case the
+migration has to decide. It was backed up to `watchlist.json.pre-v2-migration`
+with a hash-verified restore script, and the restore script was itself run once
+before the test rather than merely written. After launching the new build: the
+file is now `schemaVersion: 2`, all four items survive in their original order,
+each `binanceMapping` collapsed to a single `mapping` carrying `binance` and its
+original product ID with none mis-assigned to Coinbase, the primary coin is
+still BTC, the row reads `live`, and no recovery warning appeared.
+
+*One thing that looked like a loss and was not.* No alerts were present after
+the migration. Comparing the pre-migration backup shows all four items had
+`alert: null` before it as well, so nothing was dropped — the alerts had simply
+never been saved. Worth recording because "the alerts are gone" is exactly what
+a migration bug would look like.
+
+*Two behaviours found during verification that the delegated summary did not
+report.* Both were checked against the pre-change source before deciding.
+
+- The alert editor printed "Coinbase polls every 60 seconds and can miss a brief
+  breach" **unconditionally**, including for Binance markets, where it was
+  simply false. It now derives from the selected source's `liveness` and appears
+  only for polled venues. This is a deliberate behaviour change, kept because
+  the instruction not to change behaviour exists to stop a restructuring from
+  breaking correct behaviour, not to preserve a wrong sentence.
+- Neither polling disclosure had any test coverage. Test 22g now pins
+  `sourceLiveness(for:)`, the seam both views branch on.
+
+*Mutation checks run on the highest-risk paths*, since a green suite only proves
+the tests pass, not that they can fail: flipping the migration's Binance-first
+rule to Coinbase-first fails exactly one test, and removing the v1 dispatch
+branch fails four by dropping real v1 files into recovery. Changing Coinbase's
+poll interval from 60 to 30 fails 22g. The source was restored exactly after
+each.
+
+*Still not covered:* an alert surviving a quit-and-relaunch has never been
+exercised, which is a gap that predates this change rather than one it
+introduced.
 
 ### Chart time range
 The chart is fixed to 24 hours. Evaluated 2026-08-15; decisions below.
