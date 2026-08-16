@@ -486,7 +486,7 @@ frames, and the 6H candles were fetched directly. See the OKX paragraph in the
 survey above for both. What remains is the work, not the question of whether it
 can be done.
 
-#### Step 2a — OKX as a polling source. Landed 2026-08-16, awaiting desktop test.
+#### Step 2a — OKX as a polling source. Done, verified on the desktop 2026-08-16.
 
 Everything except the push feed. OKX has a full REST ticker, so it can ship as
 a polled source — the way Coinbase runs today — and still be a usable venue:
@@ -532,7 +532,13 @@ So volume ordering is a separate piece of work with its own cost, not part of
 adding a venue. Recorded as its own entry below. 2a does not touch
 `VenueCandidateOrdering`.
 
-#### Step 2b — the feed seam. One to two days, and the real risk.
+#### Step 2b — the feed seam. Outstanding. One to two days, and the real risk.
+
+**2a gave this a user-facing reason it did not have before.** Until OKX shipped,
+the only polled venue was Coinbase and the case for sharing the feed layer was
+structural. Now a large venue that *has* a push feed is being polled because
+this code cannot use it, and the first question after the desktop test was why
+OKX updates only every 30 seconds. That is the answer 2b removes.
 
 `BinanceFeedController` is the one thing step one deliberately did not
 abstract, and it is not a thin wrapper. Its 290 lines carry the app's only real
@@ -598,16 +604,33 @@ so plainly instead of quietly fixing or quietly ignoring it. Fixed separately in
 a rule that only happened to fit the first two. Test 22h pins it; both 22h and
 22g fail if a name regresses, verified by mutation.
 
-**Not yet verified on the desktop.** The live `watchlist.json` was backed up to
-`watchlist.json.pre-okx` (sha256 `be82cd8f…`) with a hash-verified restore
+**Verified on the desktop 2026-08-16.** The live `watchlist.json` was backed up
+to `watchlist.json.pre-okx` (sha256 `be82cd8f…`) with a hash-verified restore
 script that was run once to prove it works, not merely written. This matters
 because adding `Venue.okx` is one-way for user data even without a schema bump:
 a file containing `"okx"` cannot be decoded by a build predating the case.
 
-What the desktop test needs to show: an OKX market appears when adding a coin
-and is spelled "OKX", selecting it produces a live price and a drawn chart at
-all three ranges, the alert editor says OKX polls every 30 seconds, and the four
-existing Binance items are untouched.
+The Confirm markets screen for BTC listed OKX markets alongside Binance and
+Coinbase, spelled **OKX** rather than "Okx", and the disclosure below the list
+read "OKX polling runs every 30 seconds and can miss a brief alert breach" —
+both the venue name and the interval derived from the source rather than written
+into the view. Quote-asset ordering held with three venues: every USD and USDT
+market sorted above USDC, above FDUSD, above the fiat pairs.
+
+**The 30-second interval reads as a limitation of OKX, and it is not.** Asked
+directly during the desktop test whether OKX can only update every 30 seconds.
+It cannot, on this build: OKX has a push feed that was connected to and verified
+during the survey, and the interval is a choice made because 2b has not been
+done. The rate limit leaves ample room to poll faster. Decided 2026-08-16 to
+leave it at 30 seconds rather than tune the number, because 2b removes the
+question entirely and real use will say more about whether the lag matters than
+an estimate will. What the three venues actually do today:
+
+| Venue | Update path | Latency |
+|---|---|---|
+| Binance | WebSocket push | live |
+| Coinbase | REST poll | 60s |
+| OKX | REST poll | 30s |
 
 **Why they must be separate.** Each split isolates one class of failure.
 Combined, step one and step two leave a failing test unable to distinguish a
