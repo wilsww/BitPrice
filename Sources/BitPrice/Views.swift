@@ -1114,7 +1114,7 @@ private struct SelectedCoinDetail: View {
                         minHeight: Self.minimumChartHeight,
                         maxHeight: chartFillsAvailableHeight ? .infinity : nil
                     )
-                chartDisclosure("\(chart.range.rawValue) chart · \(chart.source.rawValue.capitalized)/\(chart.quoteAsset) · \(item.coinGeckoID)")
+                chartDisclosure("\(chart.range.rawValue) chart · \(chart.source.displayName)/\(chart.quoteAsset) · \(item.coinGeckoID)")
                 if chart.latestRefreshFailed {
                     Text("Refresh failed; showing the last available chart.")
                         .panelFont(.body)
@@ -1606,7 +1606,7 @@ private struct AddCoinView: View {
                     .foregroundStyle(.secondary)
                 if let venue = candidates.first(where: { $0.id == selectedCandidate })?.venue,
                    case .polled(let seconds) = model.sourceLiveness(for: venue) {
-                    Text("\(venue.rawValue.capitalized) polling runs every \(seconds) seconds and can miss a brief alert breach.")
+                    Text("\(venue.displayName) polling runs every \(seconds) seconds and can miss a brief alert breach.")
                         .panelFont(.body)
                         .foregroundStyle(.secondary)
                 }
@@ -1650,7 +1650,7 @@ private struct AddCoinView: View {
             ForEach(candidates) { candidate in
                 candidateRow(
                     pair: "\(candidate.baseAsset)/\(candidate.quoteAsset)",
-                    venue: candidate.venue.rawValue.capitalized,
+                    venue: candidate.venue.displayName,
                     value: candidate.id,
                     selection: selection
                 )
@@ -1806,7 +1806,7 @@ private struct AlertEditorView: View {
             }
             if let venue = item.mapping?.exchange,
                case .polled(let seconds) = model.sourceLiveness(for: venue) {
-                Text("\(venue.rawValue.capitalized) polls every \(seconds) seconds and can miss a brief breach.")
+                Text("\(venue.displayName) polls every \(seconds) seconds and can miss a brief breach.")
                     .panelFont(.body).foregroundStyle(.secondary)
             }
             if let localError { Text(localError).panelFont(.body).foregroundStyle(.red) }

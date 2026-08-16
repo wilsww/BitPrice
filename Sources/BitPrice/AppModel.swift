@@ -405,7 +405,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
     }
 
     var configuredSourceNames: String {
-        let names = priceSources.map { $0.venue.rawValue.capitalized }
+        let names = priceSources.map { $0.venue.displayName }
         guard let last = names.last else { return "configured sources" }
         if names.count == 1 { return last }
         return names.dropLast().joined(separator: ", ") + " or " + last

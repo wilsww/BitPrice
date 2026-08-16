@@ -10,6 +10,16 @@ enum Venue: String, Codable, Sendable, CaseIterable {
     case binance
     case coinbase
     case okx
+
+    /// How the venue writes its own name. `rawValue.capitalized` is wrong for any
+    /// venue whose name is not a capitalised word — it renders "okx" as "Okx".
+    var displayName: String {
+        switch self {
+        case .binance: "Binance"
+        case .coinbase: "Coinbase"
+        case .okx: "OKX"
+        }
+    }
 }
 
 enum SourceLiveness: Equatable, Sendable {
@@ -505,7 +515,7 @@ func validatePersistedState(_ state: PersistedState) throws {
     for venue in Venue.allCases {
         let productIDs = mappingsByVenue[venue, default: []].map(\.productID)
         guard Set(productIDs).count == productIDs.count else {
-            throw ValidationFailure.invalid("Duplicate \(venue.rawValue.capitalized) product ID")
+            throw ValidationFailure.invalid("Duplicate \(venue.displayName) product ID")
         }
     }
     if state.items.isEmpty {

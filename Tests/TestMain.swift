@@ -1440,6 +1440,19 @@ struct BitPriceTests {
                            "the menu bar kept the price of a deleted coin")
                 model.shutdown()
             },
+            AcceptanceTest(name: "22h every venue writes its own name the way it spells it") {
+                // `rawValue.capitalized` was the display rule until OKX arrived and
+                // rendered as "Okx" in five places. Any venue whose name is not a
+                // capitalised word needs an entry here rather than a code path.
+                try expect(
+                    Venue.allCases.map(\.displayName) == ["Binance", "Coinbase", "OKX"],
+                    "a venue is misspelled everywhere its name is shown: the market picker, the chart caption, both polling disclosures, and the duplicate-market error"
+                )
+                try expect(
+                    Venue.allCases.allSatisfy { !$0.displayName.isEmpty },
+                    "a venue with a blank name would leave a gap in the sentence naming it"
+                )
+            },
             AcceptanceTest(name: "22g polling disclosure is derived from source liveness") {
                 let root = try temporaryRoot()
                 defer { try? FileManager.default.removeItem(at: root) }
@@ -1466,7 +1479,7 @@ struct BitPriceTests {
                            "Coinbase stopped reporting a 60-second poll, so its missed-breach caveat would vanish")
                 try expect(model.sourceLiveness(for: .okx) == .polled(seconds: 30),
                            "OKX stopped reporting a 30-second poll, so users would get the wrong alert timing warning")
-                try expect(model.configuredSourceNames == "Binance, Coinbase or Okx",
+                try expect(model.configuredSourceNames == "Binance, Coinbase or OKX",
                            "the no-market message no longer names the configured sources")
                 model.shutdown()
             },
