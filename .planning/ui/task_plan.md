@@ -371,6 +371,95 @@ thing that would reopen this is a request for Monero, which no amount of work on
 Binance or Coinbase can satisfy, since both have delisted it; KuCoin and Kraken
 both carry it, and of those two only KuCoin passes the 6h candle gate.
 
+### Make the price source a replaceable part
+Raised 2026-08-16, out of the price-source survey above. **Two steps, and they
+must not be combined** — see the last paragraph for why.
+
+The survey concluded that no third venue earns its keep on coverage. A separate
+question came out of estimating the work: adding *any* venue is more expensive
+than it should be, and that is a property of this code rather than of the venues.
+The estimate is 2–3 days for a venue that is otherwise a straight copy of the
+Coinbase paths. That cost is worth removing on its own terms, independent of
+whether a third venue is ever added.
+
+**What is already right, and should not be rebuilt.** The measurement here was
+better than expected, so the work is smaller than "introduce an abstraction"
+suggests:
+
+- The **common data structures already exist and are already venue-agnostic**.
+  `VenueCandidate`, `CandlePoint`, `ChartSeries` and `Quote` each carry a
+  `venue`/`source` field and none of them are shaped around a particular API.
+  Normalising each venue's response into a shared type is done.
+- The **lower abstractions are already protocols**: `HTTPTransport`,
+  `RequestPacer`, `WebSocketSessionTransport`, `WebSocketTaskTransport`. They
+  are substitutable and already carry test doubles.
+
+**Where the hardcoding actually is.** Three places, and only three:
+
+1. **Dispatch sites — five of them, all in `AppModel`.** Lines 327–328 fan out
+   to `binanceCandidates` and `coinbaseCandidates` by name, 522 calls
+   `coinbaseStats`, and 566/570 branch between `binanceCandles` and
+   `coinbaseCandles`. This is what a parent service should absorb.
+2. **Named mapping fields — the real debt.** `WatchItem` carries
+   `binanceMapping` and `coinbaseMapping` as two named properties, and those
+   names recur through both `PersistenceStore` DTO layers, through
+   `validateState`, and in code that is only correct while there are exactly
+   two venues: `primaryVenue(for:)` is an if-chain, and
+   `chartTokenStillMatches` selects a mapping with a ternary on
+   `token.venue == .binance`. This is the only part that requires a schema
+   change.
+3. **`Binance`-prefixed names for things that are not Binance-specific**:
+   `BinanceFeedSink`, `BinanceTick`, `BinanceLifecycle`. Renames, not rework.
+
+**The shape to aim for.**
+
+```swift
+protocol PriceSource: Sendable {
+    var venue: Venue { get }
+    var liveness: SourceLiveness { get }      // .push or .polled(seconds:)
+    func candidates(symbol: String) async throws -> [VenueCandidate]
+    func quote(productID: String) async throws -> SourceQuote
+    func candles(productID:range:start:end:) async throws -> [CandlePoint]
+    func supports(_ range: ChartRange) -> Bool
+}
+```
+
+Two details in that signature carry existing behaviour that is currently
+hardcoded in the UI. `liveness` replaces the literal "Coinbase polls every 60
+seconds" text, which appears in three places in `Views.swift` and would be
+silently wrong for any new venue; the disclosure should be derived from the
+source rather than written per venue. `supports(_:)` turns "this venue lacks a
+granularity" into data — the survey found Kraken has 4h and 1d but no 6h, and
+today that could only be expressed as a special case.
+
+**Step one — restructure, with the venue list unchanged.** Introduce
+`PriceSource`, move the Binance and Coinbase implementations behind it, collapse
+the five dispatch sites, collapse the two named mapping fields into one, and
+carry the schema migration. Behaviour must not change: the same two venues, the
+same UI, the same disclosures. The existing 50 tests are the regression net for
+exactly this kind of pure structural change.
+
+**Step two — add a venue, if one is ever wanted.** With step one landed this is
+a new file implementing one protocol, estimated at half a day to a day, rather
+than a change threaded through five layers.
+
+**Why they must be separate.** Combined, a failing test cannot distinguish a
+restructuring mistake from a mis-wired new venue. Separated, step one has a
+green baseline it must reproduce exactly.
+
+**The risk that needs stating.** Collapsing the two mapping fields into one is a
+schema change, and schema changes on this app land in the recovery path that was
+hardened earlier in this session. A migration bug does not produce a crash; it
+produces a user whose watchlist is in read-only recovery mode. This is the only
+part of the work that touches user data and it deserves the most test attention.
+The feed controller is the other substantial piece: the 290 lines of connection
+lifecycle in `BinanceFeedController` (sleep/wake, lease rotation, failure
+backoff) are genuinely venue-neutral, but subscription and parsing are not —
+Binance names its stream in the URL and wraps messages in `stream`/`data`, while
+OKX subscribes with a message after connecting. Generalising means extracting
+the protocol-specific part and keeping the lifecycle shared, which is real work
+rather than a rename.
+
 ### Chart time range
 The chart is fixed to 24 hours. Evaluated 2026-08-15; decisions below.
 Implemented in ui22 and **verified on the desktop 2026-08-16** against the live
