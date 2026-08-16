@@ -1012,6 +1012,85 @@ struct BitPriceTests {
                 try expect(model.menuBarTitle == "BTC 63,928.65", "menu title omitted the primary symbol and price")
                 model.shutdown()
             },
+            // Desktop review on 2026-08-16 confirmed both halves of this by hand:
+            // deleting the primary promoted the next row, and deleting the last
+            // item left the menu bar reading "BitPrice" rather than the price of
+            // a coin that is no longer watched. Nothing held either behaviour in
+            // place afterwards, which is what these two tests are for.
+            AcceptanceTest(name: "22e deleting the primary promotes the next item") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                try store.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil))
+                let model = AppModel(
+                    persistenceStore: store, processLock: try ProcessLock(rootDirectory: root),
+                    restClients: clients(transport: StubHTTPTransport([])),
+                    feedController: controllerParts().controller, notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
+                    continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false, observeSleepWake: false
+                )
+                let firstID = UUID()
+                let secondID = UUID()
+                try model.addItem(WatchItem(
+                    id: firstID, coinGeckoID: "bitcoin", symbol: "BTC", name: "Bitcoin",
+                    binanceMapping: VenueMapping(exchange: .binance, productID: "BTCUSDT", baseAsset: "BTC",
+                                                 quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    coinbaseMapping: nil, alert: nil
+                ))
+                try model.addItem(WatchItem(
+                    id: secondID, coinGeckoID: "ethereum", symbol: "ETH", name: "Ethereum",
+                    binanceMapping: VenueMapping(exchange: .binance, productID: "ETHUSDT", baseAsset: "ETH",
+                                                 quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    coinbaseMapping: nil, alert: nil
+                ))
+                try expect(model.primaryItemID == firstID, "the first added item did not become primary")
+
+                try model.removeItem(id: firstID)
+                try expect(model.primaryItemID == secondID,
+                           "deleting the primary did not promote the remaining item")
+                try expect(model.items.count == 1, "delete removed the wrong number of items")
+                model.shutdown()
+            },
+            AcceptanceTest(name: "22f deleting the last item clears the primary and the menu title") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                try store.save(PersistedState(schemaVersion: 1, items: [], primaryItemID: nil))
+                let model = AppModel(
+                    persistenceStore: store, processLock: try ProcessLock(rootDirectory: root),
+                    restClients: clients(transport: StubHTTPTransport([])),
+                    feedController: controllerParts().controller, notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
+                    continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false, observeSleepWake: false
+                )
+                let id = UUID()
+                try model.addItem(WatchItem(
+                    id: id, coinGeckoID: "bitcoin", symbol: "BTC", name: "Bitcoin",
+                    binanceMapping: VenueMapping(exchange: .binance, productID: "BTCUSDT", baseAsset: "BTC",
+                                                 quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    coinbaseMapping: nil, alert: nil
+                ))
+                model.feedDidAccept(BinanceTick(
+                    productID: "BTCUSDT",
+                    price: Decimal(string: "63928.65")!,
+                    changePercent: Decimal(string: "1.34")!,
+                    eventDate: Date(timeIntervalSince1970: 2_000),
+                    receivedInstant: FixedContinuousClock().now()
+                ))
+                try expect(model.menuBarTitle == "BTC 63,928.65", "the primed menu title was not in place")
+
+                try model.removeItem(id: id)
+                try expect(model.primaryItemID == nil, "deleting the last item left a dangling primary")
+                try expect(model.items.isEmpty, "the watchlist was not emptied")
+                // The quote for the deleted item may still sit in `quotes`; the
+                // guard that matters is that no item resolves it, so the title
+                // must not print a price for a coin that is no longer watched.
+                try expect(model.menuBarTitle == "BitPrice",
+                           "the menu bar kept the price of a deleted coin")
+                model.shutdown()
+            },
             AcceptanceTest(name: "22b chart axis calculations") {
                 let start = Date(timeIntervalSince1970: 1_000)
                 let normal = [

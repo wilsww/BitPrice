@@ -19,16 +19,26 @@ clicking around. This was listed as a Phase 6 delivery item and has never been
 written.
 
 ### Untested paths
-Both have implementations and neither has an automated test or a desktop walk-
-through. They are recorded as untested rather than as defects — the code exists
-and reads correctly, which is precisely the state that has already proven
-insufficient in this project: seven review rounds and 68 tests passed before six
-defects appeared within minutes of the first real desktop launch.
+Recorded as untested rather than as defects — the code exists and reads
+correctly, which is precisely the state that has already proven insufficient in
+this project: seven review rounds and 68 tests passed before six defects
+appeared within minutes of the first real desktop launch.
 
-- **Deleting the primary coin, and its fallback.** `AppModel.removeItem`
-  reassigns `primaryItemID` to `draft.items.first?.id` when the deleted item was
-  primary. Deleting the last remaining item leaves `primaryItemID` nil. Neither
-  the reassignment nor the empty-watchlist case has been exercised.
+- **Deleting the primary coin, and its fallback.** Verified on the desktop
+  2026-08-16, both halves. `AppModel.removeItem` reassigns `primaryItemID` to
+  `draft.items.first?.id`, and deleting the primary promoted the next item in
+  the list as intended. Deleting the last remaining item leaves `primaryItemID`
+  nil, and `menuBarTitle` then falls back to its `"BitPrice"` guard: the empty
+  panel showed the no-watched-coins and no-coin-details states with no stale
+  price left in the menu bar. Tests `22e` and `22f` now hold both cases, and
+  were checked by mutation — deleting the reassignment line fails both. Worth
+  knowing what `22f` actually proves: with the reassignment gone, the failure
+  comes from `validatePersistedState` rejecting a dangling primary rather than
+  from the assertion, so the empty-watchlist path was never able to persist a
+  bad state. What the test adds is that `removeItem` takes the correct branch
+  instead of throwing, and that `menuBarTitle` prints `"BitPrice"` rather than
+  the price of a coin that is no longer watched — the quote itself stays in
+  `quotes` after the delete, so only the item lookup keeps it off the menu bar.
 - **Corrupt-file recovery mode.** `PersistenceStore` has several paths into
   `recovery(...)`: unreadable file, unregistered schema version, a version newer
   than this app supports, and failed validation. `recoveryProtected` then blocks
