@@ -1209,6 +1209,90 @@ struct BitPriceTests {
                 try expect(model.charts[id] == nil, "superseded chart published after remap")
                 model.shutdown()
             },
+            AcceptanceTest(name: "17g a range change refreshes every chart, not only the row that changed it") {
+                // chartRange is one global setting, but charts are stored per item.
+                // setChartRange used to clear and re-request only the row whose
+                // picker was used, leaving every other row holding a series at the
+                // old range. refreshChartIfNeeded would have repaired it, but it
+                // runs from onAppear, which does not fire again for a row already
+                // on screen -- so selecting another row showed a stale chart or a
+                // blank one captioned with a range the picker did not agree with.
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let store = try PersistenceStore(rootDirectory: root)
+                try store.save(PersistedState(schemaVersion: currentSchemaVersion, items: [], primaryItemID: nil))
+                let lock = try ProcessLock(rootDirectory: root)
+                let delayed = DelayedHTTPTransport()
+                let parts = controllerParts()
+                let model = AppModel(
+                    persistenceStore: store, processLock: lock, restClients: clients(transport: delayed),
+                    priceFeeds: [parts.controller], notifications: FakeNotifications(),
+                    wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 100_000)),
+                    continuousClock: FixedContinuousClock(), suspendingClock: FixedSuspendingClock(),
+                    startNetworking: false, observeSleepWake: false
+                )
+                let id = UUID()
+                try model.addItem(WatchItem(
+                    id: id, coinGeckoID: "bitcoin", symbol: "BTC", name: "Bitcoin",
+                    mapping: VenueMapping(exchange: .binance, productID: "BTCUSDT", baseAsset: "BTC",
+                                          quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    alert: nil
+                ))
+                for _ in 0..<100 {
+                    if await delayed.pendingCount() > 0 { break }
+                    await Task.yield()
+                }
+                let pending = await delayed.pendingCount()
+                try expect(pending == 1, "the chart request was never issued")
+
+                let candles = Data(#"[[100000000,"1","1","1","63000",""]]"#.utf8)
+                await delayed.completeFirst(response(body: candles))
+                for _ in 0..<100 {
+                    if model.charts[id] != nil { break }
+                    await Task.yield()
+                }
+                try expect(model.charts[id] != nil, "the first row never drew a chart")
+
+                // A second row, also charted at the current range.
+                let second = UUID()
+                try model.addItem(WatchItem(
+                    id: second, coinGeckoID: "ethereum", symbol: "ETH", name: "Ethereum",
+                    mapping: VenueMapping(exchange: .binance, productID: "ETHUSDT", baseAsset: "ETH",
+                                          quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    alert: nil
+                ))
+                for _ in 0..<100 {
+                    if await delayed.pendingCount() > 0 { break }
+                    await Task.yield()
+                }
+                await delayed.completeFirst(response(body: candles))
+                for _ in 0..<100 {
+                    if model.charts[second] != nil { break }
+                    await Task.yield()
+                }
+                try expect(model.charts[second] != nil, "the second row never drew a chart")
+
+                // Change the range from the FIRST row. The range is global, so the
+                // second row's chart is now at the wrong range too -- but only the
+                // first row's chart was cleared and re-requested.
+                try model.setChartRange(.days30, for: id)
+                for _ in 0..<100 {
+                    if await delayed.pendingCount() > 0 { break }
+                    await Task.yield()
+                }
+                for _ in 0..<20 {
+                    guard await delayed.pendingCount() > 0 else { break }
+                    await delayed.completeFirst(response(body: candles))
+                    for _ in 0..<20 { await Task.yield() }
+                }
+                for _ in 0..<200 { await Task.yield() }
+
+                try expect(
+                    model.charts[second]?.range == .days30,
+                    "selecting another row after changing the range shows that row's chart at the old range, or blank, until something else refreshes it"
+                )
+                model.shutdown()
+            },
             AcceptanceTest(name: "18 64 MiB boundary before decode") {
                 let oversized = Data(count: maximumHTTPBodyBytes + 1)
                 let clients = clients(transport: StubHTTPTransport([response(body: oversized)]))

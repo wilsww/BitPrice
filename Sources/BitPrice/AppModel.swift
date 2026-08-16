@@ -281,8 +281,13 @@ final class AppModel: ObservableObject, PriceFeedSink {
             throw error
         }
         lastError = nil
-        charts[itemID] = nil
-        refreshChart(itemID: itemID)
+        // The range is one global setting, so every chart is now at the wrong
+        // range -- not only the row whose picker was used. Clearing just that row
+        // left the others holding a stale series that nothing re-requested until
+        // their view happened to appear again, which for a row already on screen
+        // is never.
+        for item in items { charts[item.id] = nil }
+        refreshAllCharts()
     }
 
     func refreshChartIfNeeded(for itemID: UUID) {
