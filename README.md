@@ -10,7 +10,23 @@ No accounts, no telemetry, no third-party dependencies. macOS 14.0 or later, App
 
 ## Install
 
-There is no prebuilt release. Build from source:
+**Requires an Apple silicon Mac running macOS 14.0 or later.** The build targets `arm64` only, so it will not run on an Intel Mac.
+
+### Download
+
+Take the latest `BitPrice-<version>.zip` from the [Releases page](../../releases), expand it, and move `BitPrice.app` into `/Applications`.
+
+Then clear the quarantine attribute:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/BitPrice.app
+```
+
+**This step is required, and skipping it produces a misleading error.** macOS will say the app "is damaged and can't be opened" and offer to move it to the Trash. The app is not damaged. BitPrice is signed ad-hoc rather than with a paid Apple Developer ID, so it is not notarized, and macOS refuses anything downloaded that it cannot check with Apple. The command above removes the quarantine flag that triggers the refusal.
+
+If you would rather not run that command, build from source instead — locally built copies are never quarantined.
+
+### Build from source
 
 ```bash
 git clone <this repo>
@@ -118,7 +134,10 @@ Text size scales everything in the panel, and the panel widens with it — so a 
 ```bash
 bash scripts/run-tests.sh    # acceptance tests
 bash scripts/build-app.sh    # build and sign the app bundle
+bash scripts/release.sh 1.0  # test, build, and package a release archive
 ```
+
+`release.sh` packages only — it does not tag or publish. It refuses to run on a dirty tree or when the version argument disagrees with `Info.plist`, packages with `ditto` so the code signature survives, and verifies the signature by expanding the archive it just wrote rather than by trusting the build directory.
 
 The tests are a plain executable with an array of named cases, not XCTest. Two cases skip when run without an Aqua session; that is expected on a headless run.
 
