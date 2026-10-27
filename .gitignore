@@ -19,3 +19,7 @@ build/
 # Icon candidate contact sheets. Regenerable with scripts/preview-icon.swift;
 # only the chosen design's reference render is tracked.
 design/icon/candidates.png
+
+# Planning records. Files already tracked here stay tracked; anything new
+# (plans, the index) is local only and never reaches the public repository.
+.planning/

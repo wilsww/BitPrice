@@ -14,10 +14,9 @@ User-facing instructions live in the [top-level README](../README.md).
 |---|---|---|
 | `IMPLEMENTATION.md` | The v4 implementation specification | Describes dual-venue Binance/Coinbase mappings with fallback, per-row sparklines, and CoinGecko-only search. The app now uses one market per coin, adds OKX as a second push feed, and draws one chart for the selected row. |
 | `IMPLEMENTATION_r32.md` | Revision 3.2, the predecessor to the above | Same divergence, one revision further back. Retained for its record of the four Codex review rounds that produced the alert-fire transaction ordering, the re-arm persistence fix, and the feed circuit breaker. |
-| `findings.md` | Defect ledger from the implementation phase | Superseded by the per-phase ledgers under `.planning/`. |
-| `progress.md` | Progress log from the implementation phase | Same. |
-| `task_plan.md` | Task plan from the implementation phase | Same. |
 
-Per-phase planning records — `impl`, `redesign`, and `ui` — are under [`.planning/`](../.planning/). The `ui` set is the most recent.
+## Planning records
+
+Task plans, findings ledgers and progress logs are under [`.planning/`](../.planning/), one folder per piece of work, named `YYYY_MMDD-<slug>` after the day the work started. The plan that produced the two specifications above is `.planning/2026_0803-initial-spec/`.
 
 None of the documents in `history/` should be used as a build reference.
