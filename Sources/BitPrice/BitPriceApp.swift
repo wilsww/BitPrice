@@ -4,12 +4,14 @@ import SwiftUI
 #if !BITPRICE_TESTING
 @main
 struct BitPriceApp: App {
-    @StateObject private var model: AppModel
+    // `@State`, not `@StateObject`: the app must not observe the model, or every
+    // publish would re-evaluate `body` and bypass the panel's visibility gate.
+    @State private var model: AppModel
 
     init() {
         do {
             let productionModel = try AppModel.production()
-            _model = StateObject(wrappedValue: productionModel)
+            _model = State(wrappedValue: productionModel)
         } catch {
             fputs("BitPrice startup failed: \(error.localizedDescription)\n", stderr)
             Darwin.exit(EXIT_FAILURE)
@@ -20,9 +22,17 @@ struct BitPriceApp: App {
         MenuBarExtra {
             ContentView(model: model)
         } label: {
-            Text(model.menuBarTitle)
+            MenuBarLabel(title: model.menuBar)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+private struct MenuBarLabel: View {
+    @ObservedObject var title: MenuBarTitleModel
+
+    var body: some View {
+        Text(title.title)
     }
 }
 #endif

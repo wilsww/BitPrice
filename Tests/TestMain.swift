@@ -46,6 +46,16 @@ struct FixedSuspendingClock: SuspendingTimeSource {
     }
 }
 
+/// Shortens only the menu-bar tick, so a test can observe the loop without
+/// waiting a real second. Every other loop keeps its real interval.
+struct QuickTickSuspendingClock: SuspendingTimeSource {
+    func now() -> MonotonicInstant { MonotonicInstant(offset: .zero) }
+    func sleep(for seconds: TimeInterval) async throws {
+        let scaled = seconds == menuBarRefreshInterval ? 0.005 : seconds
+        try await ContinuousClock().sleep(for: .seconds(scaled))
+    }
+}
+
 actor NoopPacer: RequestPacer {
     private(set) var acquisitions: [(RESTRequestPriority, Int)] = []
     private(set) var backoffs: [TimeInterval] = []
@@ -2034,6 +2044,154 @@ struct BitPriceTests {
                 )
                 model.shutdown()
             },
+            // The panel keeps its views alive while hidden, and every publish
+            // used to relayout that invisible window. These pin the boundary:
+            // model state stays synchronous, and only the panel's notifications
+            // are held back.
+            AcceptanceTest(name: "24a quotes written while the panel is hidden publish nothing to it") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let model = try tickingModel(root: root)
+                defer { model.shutdown() }
+                var publishes = 0
+                let subscription = model.panel.objectWillChange.sink { publishes += 1 }
+                defer { subscription.cancel() }
+                model.feedDidAccept(btcTick(100))
+                model.feedStateDidChange(.connected, venue: .binance)
+                try await Task.sleep(for: .milliseconds(80))
+                try expect(model.quotes[model.items[0].id]?.price == 100, "the quote was not stored synchronously")
+                try expect(publishes == 0, "a hidden panel was notified, which relays out a window nobody can see")
+                try expect(model.panel.isDirty, "a hidden panel did not remember it is out of date")
+            },
+            AcceptanceTest(name: "24b a visible panel is notified on the next tick after a quote") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let model = try tickingModel(root: root)
+                defer { model.shutdown() }
+                model.panel.setPanelVisible(true)
+                // A row's first quote also starts its chart, which publishes on its
+                // own. Let that settle so the next quote is a plain price update.
+                model.feedDidAccept(btcTick(100))
+                try await Task.sleep(for: .milliseconds(100))
+                var publishes = 0
+                let subscription = model.panel.objectWillChange.sink { publishes += 1 }
+                defer { subscription.cancel() }
+                model.feedDidAccept(btcTick(101))
+                try expect(publishes == 0, "a quote published straight to the panel instead of waiting for the tick")
+                for _ in 0..<400 {
+                    if publishes > 0 { break }
+                    try await Task.sleep(for: .milliseconds(5))
+                }
+                try expect(publishes >= 1, "a visible panel never saw the new quote")
+            },
+            AcceptanceTest(name: "24c showing a dirty hidden panel publishes exactly once") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let model = try tickingModel(root: root)
+                defer { model.shutdown() }
+                model.feedDidAccept(btcTick(100))
+                try await Task.sleep(for: .milliseconds(80))
+                var publishes = 0
+                let subscription = model.panel.objectWillChange.sink { publishes += 1 }
+                defer { subscription.cancel() }
+                model.panel.setPanelVisible(true)
+                try expect(publishes == 1 && !model.panel.isDirty, "showing a stale panel did not refresh it exactly once")
+                model.panel.setPanelVisible(true)
+                model.panel.setPanelVisible(false)
+                model.panel.setPanelVisible(true)
+                try expect(publishes == 1, "showing a panel that was already current published again")
+            },
+            AcceptanceTest(name: "24d the menu bar title publishes only when its text changes") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let model = try tickingModel(root: root)
+                defer { model.shutdown() }
+                var publishes = 0
+                let subscription = model.menuBar.objectWillChange.sink { publishes += 1 }
+                defer { subscription.cancel() }
+                model.feedDidAccept(btcTick(100))
+                for _ in 0..<400 {
+                    if model.menuBar.title == "BTC 100.00" { break }
+                    try await Task.sleep(for: .milliseconds(5))
+                }
+                try expect(model.menuBar.title == "BTC 100.00", "the menu bar never caught up with the quote")
+                try expect(publishes == 1, "the title published more than once for one change")
+                model.feedDidAccept(btcTick(100))
+                try await Task.sleep(for: .milliseconds(80))
+                try expect(publishes == 1, "an unchanged title was published again")
+                model.feedDidAccept(btcTick(101))
+                for _ in 0..<400 {
+                    if model.menuBar.title == "BTC 101.00" { break }
+                    try await Task.sleep(for: .milliseconds(5))
+                }
+                try expect(publishes == 2, "a changed title did not publish exactly once")
+            },
+            AcceptanceTest(name: "24e alerts fire on the quote itself while the panel is hidden") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let notifications = FakeNotifications()
+                let model = try tickingModel(root: root, notifications: notifications)
+                defer { model.shutdown() }
+                try model.saveAlert(
+                    itemID: model.items[0].id,
+                    proposed: PriceAlert(direction: .above, threshold: 10, cooldownSeconds: 0,
+                                         hysteresisPercent: 0, isEnabled: true, isArmed: true, lastFiredAt: nil)
+                )
+                await Task.yield()
+                model.feedDidAccept(btcTick(11))
+                try expect(model.items[0].alert?.isArmed == false, "the alert waited for the tick instead of firing on the quote")
+                await Task.yield(); await Task.yield()
+                try expect(notifications.submissions.count == 1, "a hidden panel suppressed the alert notification")
+            },
+            AcceptanceTest(name: "24f a repeated identical error does not publish again") {
+                let root = try temporaryRoot()
+                let notifications = FakeNotifications()
+                let model = try tickingModel(root: root, notifications: notifications)
+                defer {
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+                    try? FileManager.default.removeItem(at: root)
+                    model.shutdown()
+                }
+                try model.saveAlert(
+                    itemID: model.items[0].id,
+                    proposed: PriceAlert(direction: .above, threshold: 10, cooldownSeconds: 0,
+                                         hysteresisPercent: 0, isEnabled: true, isArmed: true, lastFiredAt: nil)
+                )
+                // A read-only folder makes every latch save fail, and a failed
+                // latch leaves the alert armed, so each quote fails the same way.
+                try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: root.path)
+                model.feedDidAccept(btcTick(11))
+                try expect(model.lastError?.hasPrefix("Alert state could not be saved") == true,
+                           "the alert save failure was not reported")
+                var publishes = 0
+                let subscription = model.objectWillChange.sink { publishes += 1 }
+                defer { subscription.cancel() }
+                model.feedDidAccept(btcTick(12))
+                model.feedDidAccept(btcTick(13))
+                try expect(publishes == 0, "the same error was assigned again on every quote")
+            },
+            AcceptanceTest(name: "24g deleting an item forgets its chart failure") {
+                let root = try temporaryRoot()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let model = try tickingModel(root: root)
+                defer { model.shutdown() }
+                let id = UUID()
+                try model.addItem(WatchItem(
+                    id: id, coinGeckoID: "ethereum", symbol: "ETH", name: "Ethereum",
+                    mapping: VenueMapping(exchange: .binance, productID: "ETHUSDT", baseAsset: "ETH",
+                                          quoteAsset: "USDT", provenance: .userConfirmedTickerMatch),
+                    alert: nil
+                ))
+                for _ in 0..<400 {
+                    if model.chartFailures.contains(id) { break }
+                    try await Task.sleep(for: .milliseconds(5))
+                }
+                try expect(model.chartFailures.contains(id), "the chart request did not fail as the test requires")
+                try model.removeItem(id: id)
+                try expect(!model.chartFailures.contains(id), "a deleted row's chart failure was kept")
+                try expect(model.chartFailures.isSubset(of: Set(model.items.map(\.id))),
+                           "chart failures accumulated ids of rows that no longer exist")
+            },
             AcceptanceTest(name: "22b chart axis calculations") {
                 let start = Date(timeIntervalSince1970: 1_000)
                 let normal = [
@@ -2423,6 +2581,35 @@ struct BitPriceTests {
             suspendingClock: FixedSuspendingClock(),
             startNetworking: false,
             observeSleepWake: false
+        )
+    }
+
+    /// A seeded Bitcoin model whose menu-bar loop is already running on a fast
+    /// tick. `setPrimary` is a no-op edit whose only job is to start the loops.
+    @MainActor
+    static func tickingModel(
+        root: URL, notifications: FakeNotifications = FakeNotifications(), transport: any HTTPTransport = StubHTTPTransport([])
+    ) throws -> AppModel {
+        let model = AppModel(
+            persistenceStore: try PersistenceStore(rootDirectory: root),
+            processLock: try ProcessLock(rootDirectory: root),
+            restClients: clients(transport: transport),
+            priceFeeds: [controllerParts().controller],
+            notifications: notifications,
+            wallClock: FixedWallClock(value: Date(timeIntervalSince1970: 2_000)),
+            continuousClock: FixedContinuousClock(),
+            suspendingClock: QuickTickSuspendingClock(),
+            startNetworking: false,
+            observeSleepWake: false
+        )
+        try model.setPrimary(model.items[0].id)
+        return model
+    }
+
+    static func btcTick(_ price: Decimal) -> PriceTick {
+        PriceTick(
+            venue: .binance, productID: "BTCUSDT", price: price, changePercent: 1,
+            eventDate: Date(timeIntervalSince1970: 2_000), receivedInstant: FixedContinuousClock().now()
         )
     }
 

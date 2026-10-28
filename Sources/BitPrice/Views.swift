@@ -564,9 +564,17 @@ enum ChartAxisCalculator {
 }
 
 struct ContentView: View {
-    @ObservedObject var model: AppModel
+    // Plain reference for reading and actions. Views observe `panel`, never the
+    // model, so a hidden panel is not invalidated by model publishes.
+    let model: AppModel
+    @ObservedObject var panel: PanelModel
     @State private var route: PanelRoute = .list
     @State private var selectedItemID: WatchItem.ID?
+
+    init(model: AppModel) {
+        self.model = model
+        _panel = ObservedObject(wrappedValue: model.panel)
+    }
 
     var body: some View {
         Group {
@@ -574,16 +582,16 @@ struct ContentView: View {
             case .list:
                 listContent
             case .add:
-                AddCoinView(model: model) { route = .list }
+                AddCoinView(model: model, panel: panel) { route = .list }
             case let .alert(itemID):
                 if let item = model.items.first(where: { $0.id == itemID }) {
-                    AlertEditorView(model: model, item: item) { route = .list }
+                    AlertEditorView(model: model, panel: panel, item: item) { route = .list }
                 } else {
                     // The item was removed while its editor was open.
                     Color.clear.onAppear { route = .list }
                 }
             case .settings:
-                SettingsView(model: model) { route = .list }
+                SettingsView(model: model, panel: panel) { route = .list }
             }
         }
         .padding(16)
@@ -593,6 +601,7 @@ struct ContentView: View {
             height: model.persistedState.textSize.panelHeight
         )
         .background(.regularMaterial)
+        .background(PanelWindowObserver { panel.setPanelVisible($0) })
         .onAppear { reconcileSelection() }
         .onChange(of: model.items.map(\.id)) { _, _ in reconcileSelection() }
     }
@@ -654,7 +663,7 @@ struct ContentView: View {
                     VStack(spacing: 0) {
                         List(selection: $selectedItemID) {
                             ForEach(model.items) { item in
-                                WatchRow(model: model, item: item) { route = .alert(item.id) }
+                                WatchRow(model: model, panel: panel, item: item) { route = .alert(item.id) }
                                     .tag(item.id)
                             }
                             .onMove { source, destination in
@@ -675,6 +684,7 @@ struct ContentView: View {
                             ViewThatFits(in: .vertical) {
                                 SelectedCoinDetail(
                                     model: model,
+                                    panel: panel,
                                     item: selectedItem,
                                     chartFillsAvailableHeight: true
                                 ) {
@@ -683,6 +693,7 @@ struct ContentView: View {
                                 ScrollView {
                                     SelectedCoinDetail(
                                         model: model,
+                                        panel: panel,
                                         item: selectedItem,
                                         chartFillsAvailableHeight: false
                                     ) {
@@ -743,7 +754,8 @@ struct ContentView: View {
 }
 
 private struct SettingsView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
+    @ObservedObject var panel: PanelModel
     let close: () -> Void
     @State private var localError: String?
     @State private var loginItemStatus: LoginItemStatus = .unknown
@@ -1088,7 +1100,8 @@ private struct BannerView: View {
 }
 
 private struct WatchRow: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
+    @ObservedObject var panel: PanelModel
     let item: WatchItem
     let editAlert: () -> Void
     @Environment(\.panelTextSize) private var panelTextSize
@@ -1196,7 +1209,8 @@ private struct EmptyDetailView: View {
 private struct SelectedCoinDetail: View {
     private static let minimumChartHeight: CGFloat = 140
 
-    @ObservedObject var model: AppModel
+    let model: AppModel
+    @ObservedObject var panel: PanelModel
     let item: WatchItem
     let chartFillsAvailableHeight: Bool
     let remove: () -> Void
@@ -1642,7 +1656,8 @@ private struct Sparkline: View {
 }
 
 private struct AddCoinView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
+    @ObservedObject var panel: PanelModel
     let close: () -> Void
     @State private var searchText = ""
     @State private var project: SearchResult?
@@ -1889,7 +1904,8 @@ private struct AddCoinView: View {
 }
 
 private struct AlertEditorView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
+    @ObservedObject var panel: PanelModel
     let item: WatchItem
     let close: () -> Void
     @State private var enabled: Bool
@@ -1899,8 +1915,9 @@ private struct AlertEditorView: View {
     @State private var hysteresis: String
     @State private var localError: String?
 
-    init(model: AppModel, item: WatchItem, close: @escaping () -> Void) {
+    init(model: AppModel, panel: PanelModel, item: WatchItem, close: @escaping () -> Void) {
         self.model = model
+        self.panel = panel
         self.item = item
         self.close = close
         let alert = item.alert

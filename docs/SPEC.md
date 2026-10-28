@@ -57,6 +57,14 @@ Use SwiftUI `MenuBarExtra` with `.menuBarExtraStyle(.window)`. The app has no or
 
 The menu-bar title is `SYMBOL price` for the primary item when it has a quote. It is `BitPrice` when the watchlist is empty, the primary reference is absent, or the primary has no quote. Use grouping separators, two fractional digits for prices at least 1, and up to six fractional digits below 1.
 
+#### 2.1.0 Display update cadence
+
+Quotes are stored synchronously as they arrive, and alerts are evaluated on each accepted quote, but a quote by itself never invalidates a view. A one-second display tick (`menuBarRefreshInterval`) does two things: it recomputes the menu-bar title and assigns it only when the text changed, and, if any quote was stored since the last tick, it tells the panel. The title is also recomputed immediately after a structural edit, a recovery reset, launch, and wake, so a primary change never waits for the tick.
+
+The panel's views observe only `PanelModel`, never `AppModel`, and the app scene holds `AppModel` without observing it. `MenuBarExtra(.window)` hides its window on close rather than destroying it, so a hidden panel would otherwise keep laying out on every model change. `PanelModel` forwards model changes and display ticks while the panel window's occlusion state includes `.visible`, and only records that something changed while it does not. Showing the panel sends one update if anything changed while it was hidden. Occlusion is the only visibility signal: on a Space switch the window reports occluded while `isVisible` and `isKeyWindow` are still true. The initial state is hidden.
+
+`lastError` is assigned only when its text changes, so a failure that repeats on every quote does not republish.
+
 The panel is approximately 380 points wide and contains:
 
 - a header with the app name, the single connection presentation, and Add;
@@ -346,7 +354,8 @@ dictionary of exact persisted product-ID sets keyed by venue; each feed receives
 its own set or an empty set. For a nonempty watchlist, `AppModel` immediately
 requests quotes from every polled source, refreshes every chart, starts one quote
 loop per polled source at that source's declared interval, starts the 15-minute
-candle loop, and starts the 15-second freshness loop.
+candle loop, starts the 15-second freshness loop, and starts the one-second
+display tick (§2.1.0).
 
 Every structural edit still saves the complete validated draft before
 publication. After publication it clears runtime state for removed or remapped
@@ -356,7 +365,7 @@ same mapping never increments `marketRevisions` and never cancels an already
 current chart request.
 
 An empty watchlist gives every feed an empty set and cancels all quote, candle,
-and freshness loops. Wake resumes every feed, immediately polls configured
+freshness, and display-tick loops. Wake resumes every feed, immediately polls configured
 polled sources, refreshes all charts, and creates missing periodic loops without
 replaying missed intervals. Sleep cancels search, REST work, and periodic loops
 before suspending every feed.
@@ -1063,6 +1072,7 @@ The implementation must inject testable wrappers for the three time domains. Mon
 | Coinbase poll cadence | 60 s | `SuspendingClock` | Do not replay missed polls. Wake performs one immediate reconciliation. |
 | Candle refresh cadence | 15 min | `SuspendingClock` | Do not replay missed refreshes. Wake performs one immediate refresh. |
 | Freshness publication cadence | 15 s | `SuspendingClock` | UI boundary updates only while running; wake recomputes immediately. |
+| Display tick (menu-bar title, visible panel quotes) | 1 s | `SuspendingClock` | No ticks while asleep; wake runs one tick immediately. Alerts do not wait for it. |
 | Search debounce | 300 ms | `SuspendingClock` plus explicit cancellation on sleep | Sleep must not complete a pending typing debounce; wake has no retained query task. |
 | REST transport timeout | 15 s | `URLRequest.timeoutInterval` | Concrete URL loading timeout; completion still undergoes token and continuous-age checks. |
 | Candle query interval | exact previous 24 h | `Date` in UTC request parameters | Venue APIs require absolute timestamps; this is a query range, not a duration-health decision. |

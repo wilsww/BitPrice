@@ -233,6 +233,8 @@ final class BinanceFeedController: PriceFeed, WebSocketLifecycleReceiving {
         _ = failure
     }
 
+    private static let decoder = JSONDecoder()
+
     private func accept(_ message: WebSocketInboundMessage, expectedConnectionID: UUID, taskIdentifier: Int) {
         guard state == .connected,
               callbackIsCurrent(taskIdentifier: taskIdentifier, connectionID: expectedConnectionID) else { return }
@@ -242,7 +244,7 @@ final class BinanceFeedController: PriceFeed, WebSocketLifecycleReceiving {
         case .data(let value): data = value
         }
         guard data.count <= maximumWebSocketMessageBytes,
-              let wrapper = try? JSONDecoder().decode(BinanceCombinedTicker.self, from: data),
+              let wrapper = try? Self.decoder.decode(BinanceCombinedTicker.self, from: data),
               currentProductIDs.contains(wrapper.data.symbol),
               wrapper.stream == wrapper.data.symbol.lowercased() + "@ticker",
               let price = positiveDecimal(from: wrapper.data.close),
@@ -305,6 +307,24 @@ private struct OKXWebSocketEvent: Decodable {
     let event: String
     let code: String?
     let msg: String?
+}
+
+/// One parse per message: an event is tried first, then a ticker frame, so each
+/// message is parsed once rather than once per shape.
+private enum OKXInboundMessage: Decodable {
+    case event(OKXWebSocketEvent)
+    case ticker(OKXTickerFrame)
+    case unrecognized
+
+    init(from decoder: any Decoder) throws {
+        if let event = try? OKXWebSocketEvent(from: decoder) {
+            self = .event(event)
+        } else if let frame = try? OKXTickerFrame(from: decoder) {
+            self = .ticker(frame)
+        } else {
+            self = .unrecognized
+        }
+    }
 }
 
 private struct OKXTickerFrame: Decodable {
@@ -585,6 +605,8 @@ final class OKXFeed: PriceFeed, WebSocketLifecycleReceiving {
         _ = failure
     }
 
+    private static let decoder = JSONDecoder()
+
     private func accept(_ message: WebSocketInboundMessage, expectedConnectionID: UUID, taskIdentifier: Int) {
         guard state == .connected,
               callbackIsCurrent(taskIdentifier: taskIdentifier, connectionID: expectedConnectionID) else { return }
@@ -594,7 +616,10 @@ final class OKXFeed: PriceFeed, WebSocketLifecycleReceiving {
         case .data(let value): data = value
         }
         guard data.count <= maximumWebSocketMessageBytes else { return }
-        if let event = try? JSONDecoder().decode(OKXWebSocketEvent.self, from: data) {
+        guard let inbound = try? Self.decoder.decode(OKXInboundMessage.self, from: data) else { return }
+        let frame: OKXTickerFrame
+        switch inbound {
+        case .event(let event):
             if event.event == "error" {
                 let message = event.msg.flatMap { $0.isEmpty ? nil : $0 } ?? "OKX subscription failed"
                 failCurrent(
@@ -604,9 +629,12 @@ final class OKXFeed: PriceFeed, WebSocketLifecycleReceiving {
                 )
             }
             return
+        case .unrecognized:
+            return
+        case .ticker(let decoded):
+            frame = decoded
         }
-        guard let frame = try? JSONDecoder().decode(OKXTickerFrame.self, from: data),
-              frame.arg.channel == "tickers",
+        guard frame.arg.channel == "tickers",
               currentProductIDs.contains(frame.arg.instId) else { return }
         for ticker in frame.data {
             guard ticker.instId == frame.arg.instId,

@@ -2,6 +2,10 @@ import AppKit
 import Combine
 import Foundation
 
+/// How often the menu bar title and the visible panel's quotes catch up with
+/// the quotes the model has already stored.
+let menuBarRefreshInterval: TimeInterval = 1
+
 enum RequestActivity: Equatable, Sendable {
     case idle
     case requesting
@@ -53,7 +57,12 @@ final class PriceFeedCoordinator: PriceFeedSink {
 @MainActor
 final class AppModel: ObservableObject, PriceFeedSink {
     @Published private(set) var persistedState: PersistedState
-    @Published private(set) var quotes: [UUID: Quote] = [:]
+    /// Not `@Published`: a quote arrives several times a second, and publishing
+    /// each one would invalidate the panel's views. Writes stay synchronous; the
+    /// one-second tick tells `panel` when any happened.
+    private(set) var quotes: [UUID: Quote] = [:] {
+        didSet { quotesDirty = true }
+    }
     @Published private(set) var charts: [UUID: ChartSeries] = [:]
     /// Rows whose most recent chart request failed with nothing already drawn.
     /// Kept apart from `charts` because there is no series to attach it to.
@@ -67,6 +76,8 @@ final class AppModel: ObservableObject, PriceFeedSink {
     @Published private(set) var freshnessPulse = false
 
     let persistenceStore: PersistenceStore
+    let panel = PanelModel()
+    let menuBar = MenuBarTitleModel()
     private let processLock: ProcessLock
     private let restClients: RESTClients
     private let priceSources: [any PriceSource]
@@ -88,6 +99,8 @@ final class AppModel: ObservableObject, PriceFeedSink {
     private var quoteLoops: [Venue: Task<Void, Never>] = [:]
     private var candleLoop: Task<Void, Never>?
     private var freshnessLoop: Task<Void, Never>?
+    private var menuBarLoop: Task<Void, Never>?
+    private var quotesDirty = false
     private var workspaceObservers: [NSObjectProtocol] = []
     private var applicationObserver: NSObjectProtocol?
 
@@ -171,6 +184,8 @@ final class AppModel: ObservableObject, PriceFeedSink {
             """
         }
         for item in persistedState.items { marketRevisions[item.id] = 0 }
+        panel.observe(objectWillChange)
+        refreshMenuBarTitle()
         feedCoordinator.attachSink(self)
         if observeSleepWake { installSleepWakeObservers() }
         if startNetworking { startNetworkWork() }
@@ -228,6 +243,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
         reconcileRuntimeAfterEdit(oldState: oldState, newState: draft)
         feedCoordinator.replaceProducts(productIDsByVenue(in: draft))
         reconcilePeriodicLoops()
+        refreshMenuBarTitle()
     }
 
     func addItem(_ item: WatchItem) throws {
@@ -280,10 +296,10 @@ final class AppModel: ObservableObject, PriceFeedSink {
                 draft.chartRange = range
             }
         } catch {
-            lastError = error.localizedDescription
+            setLastError(error.localizedDescription)
             throw error
         }
-        lastError = nil
+        setLastError(nil)
         // The range is one global setting, so every chart is now at the wrong
         // range -- not only the row whose picker was used. Clearing just that row
         // left the others holding a stale series that nothing re-requested until
@@ -329,8 +345,8 @@ final class AppModel: ObservableObject, PriceFeedSink {
                 guard let self else { return }
                 switch await self.notifications.requestAuthorization() {
                 case .success(true): break
-                case .success(false): self.lastError = "Notification permission denied; alerts will latch without a macOS banner."
-                case .failure(let failure): self.lastError = failure.message
+                case .success(false): self.setLastError("Notification permission denied; alerts will latch without a macOS banner.")
+                case .failure(let failure): self.setLastError(failure.message)
                 }
             }
         }
@@ -345,13 +361,15 @@ final class AppModel: ObservableObject, PriceFeedSink {
             persistedState = seed
             persistenceMode = .writable
             recoveryMessage = nil
-            lastError = nil
+            setLastError(nil)
             quotes.removeAll()
             charts.removeAll()
+            chartFailures.removeAll()
             marketRevisions = [seed.items[0].id: 0]
+            refreshMenuBarTitle()
             startNetworkWork()
         } catch {
-            lastError = "Reset failed: \(error.localizedDescription)"
+            setLastError("Reset failed: \(error.localizedDescription)")
         }
     }
 
@@ -446,6 +464,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
         pollQuotes()
         refreshAllCharts()
         reconcilePeriodicLoops()
+        menuBarTick()
     }
 
     func shutdown() {
@@ -517,11 +536,16 @@ final class AppModel: ObservableObject, PriceFeedSink {
         return "\(item.symbol) \(Self.formatPrice(quote.price))"
     }
 
-    static func formatPrice(_ value: Decimal) -> String {
+    private static let priceFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         formatter.usesGroupingSeparator = true
         formatter.minimumFractionDigits = 2
+        return formatter
+    }()
+
+    static func formatPrice(_ value: Decimal) -> String {
+        let formatter = priceFormatter
         formatter.maximumFractionDigits = value >= 1 ? 2 : 6
         return formatter.string(from: NSDecimalNumber(decimal: value)) ?? decimalString(value)
     }
@@ -554,6 +578,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
             quoteLoops.values.forEach { $0.cancel() }; quoteLoops.removeAll()
             candleLoop?.cancel(); candleLoop = nil
             freshnessLoop?.cancel(); freshnessLoop = nil
+            menuBarLoop?.cancel(); menuBarLoop = nil
             return
         }
         for source in priceSources {
@@ -587,6 +612,35 @@ final class AppModel: ObservableObject, PriceFeedSink {
                 }
             }
         }
+        // One loop serves the menu bar and the panel's quotes, so the app wakes
+        // once a second for both rather than twice.
+        if menuBarLoop == nil {
+            menuBarLoop = Task { @MainActor [weak self] in
+                guard let self else { return }
+                while !Task.isCancelled {
+                    do { try await self.suspendingClock.sleep(for: menuBarRefreshInterval) } catch { return }
+                    self.menuBarTick()
+                }
+            }
+        }
+    }
+
+    private func menuBarTick() {
+        refreshMenuBarTitle()
+        if quotesDirty {
+            quotesDirty = false
+            panel.modelDidChange()
+        }
+    }
+
+    private func refreshMenuBarTitle() {
+        menuBar.update(menuBarTitle)
+    }
+
+    /// Several callers can hit the same failure on every tick, and an unchanged
+    /// message must not publish.
+    private func setLastError(_ message: String?) {
+        if lastError != message { lastError = message }
     }
 
     private func pollQuotes() {
@@ -748,7 +802,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
             try persistenceStore.save(draft)
             persistedState = draft
         } catch {
-            lastError = "Alert state could not be saved: \(error.localizedDescription)"
+            setLastError("Alert state could not be saved: \(error.localizedDescription)")
             return
         }
         if case .fire(_, _, let firedAt) = decision {
@@ -757,7 +811,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
                 if case .failure(let failure) = await self.notifications.submit(
                     itemID: itemID, symbol: symbol, price: price, firedAt: firedAt
                 ) {
-                    self.lastError = failure.message
+                    self.setLastError(failure.message)
                 }
             }
         }
@@ -790,6 +844,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
         chartTokens[itemID] = nil
         quotes[itemID] = nil
         charts[itemID] = nil
+        chartFailures.remove(itemID)
         sourceActivity[itemID] = nil
         marketRevisions[itemID] = nil
     }
@@ -803,6 +858,7 @@ final class AppModel: ObservableObject, PriceFeedSink {
         quoteLoops.values.forEach { $0.cancel() }; quoteLoops.removeAll()
         candleLoop?.cancel(); candleLoop = nil
         freshnessLoop?.cancel(); freshnessLoop = nil
+        menuBarLoop?.cancel(); menuBarLoop = nil
     }
 
     private func productIDsByVenue(in state: PersistedState) -> [Venue: Set<String>] {
