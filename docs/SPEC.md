@@ -1120,8 +1120,8 @@ The root `Info.plist` must contain:
 - `CFBundleIdentifier`: `com.wayne.bitprice`;
 - `CFBundleExecutable`: `BitPrice`;
 - `CFBundlePackageType`: `APPL`;
-- `CFBundleShortVersionString`: `1.0`;
-- `CFBundleVersion`: `1`;
+- `CFBundleShortVersionString`: `1.1`;
+- `CFBundleVersion`: `2`;
 - `LSMinimumSystemVersion`: `14.0`;
 - `LSUIElement`: boolean true;
 - `NSHighResolutionCapable`: boolean true.

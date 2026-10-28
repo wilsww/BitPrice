@@ -134,7 +134,7 @@ Text size scales everything in the panel, and the panel widens with it — so a 
 ```bash
 bash scripts/run-tests.sh    # acceptance tests
 bash scripts/build-app.sh    # build and sign the app bundle
-bash scripts/release.sh 1.0  # test, build, and package a release archive
+bash scripts/release.sh 1.1  # test, build, and package a release archive
 ```
 
 `release.sh` packages only — it does not tag or publish. It refuses to run on a dirty tree or when the version argument disagrees with `Info.plist`, packages with `ditto` so the code signature survives, and verifies the signature by expanding the archive it just wrote rather than by trusting the build directory.
