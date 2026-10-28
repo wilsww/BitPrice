@@ -29,7 +29,7 @@ If you would rather not run that command, build from source instead — locally 
 ### Build from source
 
 ```bash
-git clone <this repo>
+git clone https://github.com/wilsww/BitPrice.git
 cd BitPrice
 bash scripts/build-app.sh
 open build/BitPrice.app
@@ -73,7 +73,7 @@ The watchlist holds up to 25 coins. The first launch seeds Bitcoin.
 
 Each row has a star on its left. Click it to make that coin the **primary** — the one whose symbol and price appear in the menu bar itself. The star fills yellow on the current primary.
 
-The label reads as `SYMBOL price`, for example `BTC 67,432.10`. Prices show two decimals at or above 1 and up to six below it, so small-denomination coins stay legible.
+The label reads as `SYMBOL price`, for example `BTC 67,432.10`. Prices show two decimals at or above 1 and up to six below it, so small-denomination coins stay legible. The label, and the panel while it is open, catch up with incoming prices once a second; alerts are checked on every price as it arrives.
 
 If the watchlist is empty, or the primary has no price yet, the label falls back to `BitPrice`.
 
@@ -125,7 +125,7 @@ The alerts section tells you directly whether macOS will deliver notifications. 
 
 Text size scales everything in the panel, and the panel widens with it — so a larger size does not squeeze the columns.
 
-**Quit** is at the bottom left of Settings, below the version number.
+**Quit** is at the bottom left of Settings, below the version number. Clicking the app icon or name above the version number opens this repository in your browser.
 
 ![The Settings screen](docs/images/settings.jpg)
 
@@ -151,4 +151,4 @@ Superseded design documents are in [docs/history/](docs/history/). They record h
 - One market per coin. There is no failover to a second venue if that market's feed goes quiet.
 - Coinbase-sourced coins update every 60 seconds rather than continuously.
 - Up to 25 coins.
-- The app is signed ad-hoc, so first launch may need a right-click → Open.
+- The app is signed ad-hoc and not notarized, so a downloaded copy needs its quarantine flag cleared before first launch (see [Install](#download)).
