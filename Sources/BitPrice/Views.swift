@@ -1017,20 +1017,32 @@ private struct SettingsView: View {
         }
     }
 
+    private static let repositoryURL = URL(string: "https://github.com/wilsww/BitPrice")!
+
     private var appIdentityBlock: some View {
         VStack(spacing: 4) {
-            Image(nsImage: NSApplication.shared.applicationIconImage)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(
-                    width: 80 * PanelFont.multiplier(for: model.persistedState.textSize),
-                    height: 80 * PanelFont.multiplier(for: model.persistedState.textSize)
-                )
-            if let appName {
-                Text(appName)
-                    .panelFont(.headline)
-                    .foregroundStyle(.secondary)
+            Button {
+                NSWorkspace.shared.open(Self.repositoryURL)
+            } label: {
+                VStack(spacing: 4) {
+                    Image(nsImage: NSApplication.shared.applicationIconImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(
+                            width: 80 * PanelFont.multiplier(for: model.persistedState.textSize),
+                            height: 80 * PanelFont.multiplier(for: model.persistedState.textSize)
+                        )
+                    if let appName {
+                        Text(appName)
+                            .panelFont(.headline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .help("Open the BitPrice repository on GitHub")
+            .accessibilityLabel("Open the BitPrice repository on GitHub")
             if let versionText {
                 Text(versionText)
                     .panelFont(.body)
